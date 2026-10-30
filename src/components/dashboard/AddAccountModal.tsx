@@ -23,37 +23,55 @@ export function AddAccountModal({ isOpen, onClose }: AddAccountModalProps) {
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!label.trim() || !token.trim() || !channelId.trim()) return;
 
     setLoading(true);
 
-    // Mask / simulate token encryption
-    const encryptedToken = `enc_aes256_${btoa(token.slice(0, 15))}...`;
+    try {
+      const res = await fetch('/api/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: label.trim(),
+          token: token.trim(),
+          channel_id: channelId.trim(),
+          farmable_item: farmableItem,
+          gem_floor: Number(gemFloor),
+          avatar_url: `https://images.unsplash.com/photo-${1600000000000 + Math.floor(Math.random() * 90000000)}?w=128&q=80`,
+        }),
+      });
 
-    simulationStore.addAccount({
-      label: label.trim(),
-      encrypted_token: encryptedToken,
-      channel_id: channelId.trim(),
-      farmable_item: farmableItem,
-      gem_floor: Number(gemFloor),
-      status: 'ACTIVE',
-      avatar_url: `https://images.unsplash.com/photo-${1600000000000 + Math.floor(Math.random() * 90000000)}?w=128&q=80`,
-    });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Gagal menambahkan akun');
+      }
 
-    setLoading(false);
-    showToast({
-      type: 'success',
-      title: 'Akun Ditambahkan',
-      message: `Akun bot '${label}' siap digunakan dan aktif memantau channel ${channelId}.`,
-    });
+      // Also notify local simulation store to refresh
+      await simulationStore.init();
+      await simulationStore.refreshFromSupabase();
 
-    // Reset & close
-    setLabel('');
-    setToken('');
-    setChannelId('');
-    onClose();
+      showToast({
+        type: 'success',
+        title: 'Akun Ditambahkan',
+        message: `Akun bot '${label}' berhasil didaftarkan dengan token terenkripsi AES-256.`,
+      });
+
+      // Reset & close
+      setLabel('');
+      setToken('');
+      setChannelId('');
+      onClose();
+    } catch (err: unknown) {
+      showToast({
+        type: 'error',
+        title: 'Gagal Tambah Akun',
+        message: err instanceof Error ? err.message : 'Terjadi kesalahan sistem',
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

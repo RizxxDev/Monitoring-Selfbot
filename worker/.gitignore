@@ -1,0 +1,23 @@
+# config asli berisi token - jangan pernah ter-commit
+config.py
+.env
+.env.*
+!.env.example
+
+# logs
+runs.log
+*.log
+
+# archives
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# python cache
+__pycache__/
+*.py[cod]
+
+# IDEs
+.vscode/
+.idea/

@@ -33,3 +33,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Python & Worker secrets
+config.py
+worker/config.py
+*.log
+runs.log
+__pycache__/
+*.pyc

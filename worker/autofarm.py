@@ -1203,6 +1203,25 @@ class Engine:
     # -------------------------------------------------------------------------
     # PARSER DATA EMBED
     # -------------------------------------------------------------------------
+    def read_gems(self, msgs=None):
+        docs = (
+            [msgs]
+            if isinstance(msgs, dict)
+            else (msgs if msgs is not None else self.fetch_messages(30))
+        )
+        for doc in docs:
+            if not self._is_growcord(doc, GROWCORD_APP_ID):
+                continue
+            text = self.message_text(doc)
+            wx = self._rx_gem.search(text)
+            if wx:
+                digits = re.sub(r"\D", "", wx.group(1))
+                try:
+                    return int(digits)
+                except ValueError:
+                    return None
+        return None
+
     def read_autofarm_state(self, msgs=None):
         docs = (
             [msgs]

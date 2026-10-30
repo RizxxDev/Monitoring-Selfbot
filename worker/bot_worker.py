@@ -29,8 +29,13 @@ from supabase_client import SupabaseClient
 log = logging.getLogger("growcord.worker")
 
 
-def parse_duration_to_sec(dur_str: str) -> int:
-    """Mengonversi format durasi seperti '1h 20m', '45m 10s', atau '25m' ke total detik."""
+def parse_duration_to_sec(dur_val: Any) -> int:
+    """Mengonversi format durasi detik (int) atau string '1h 20m', '45m 10s' ke total detik."""
+    if dur_val is None:
+        return 0
+    if isinstance(dur_val, (int, float)):
+        return int(dur_val)
+    dur_str = str(dur_val).strip()
     if not dur_str:
         return 0
     total = 0
@@ -252,12 +257,39 @@ class BotWorker(threading.Thread):
                 self.label,
             )
 
+    def _read_gems_safe(self, data: Dict[str, Any]) -> Optional[int]:
+        """Ekstraksi angka gems secara aman dengan fallback regex."""
+        if hasattr(self.engine, "read_gems"):
+            try:
+                val = self.engine.read_gems([data])
+                if val is not None:
+                    return val
+            except Exception:
+                pass
+
+        try:
+            text = self.engine.message_text(data)
+            rx = getattr(self.engine, "_rx_gem", None)
+            if not rx:
+                rx = re.compile(r"Gems\*{0,2}\s*[:=]\s+\*{0,2}([\d.,]+)\*{0,2}", re.I)
+            wx = rx.search(text)
+            if wx:
+                digits = re.sub(r"\D", "", wx.group(1))
+                return int(digits)
+        except Exception:
+            pass
+        return None
+
     def _process_growcord_embed(self, data: Dict[str, Any]):
         """Membaca isi embed utama Growcord Farm."""
-        text = self.engine.message_text(data)
+        try:
+            text = self.engine.message_text(data)
+        except Exception:
+            return
+
         if "Growcord Farm" in text:
-            # Baca Gems
-            gems = self.engine.read_gems([data])
+            # Baca Gems secara aman
+            gems = self._read_gems_safe(data)
             if gems is not None:
                 self.last_gems = gems
                 if gems < self.gem_floor:
@@ -270,29 +302,35 @@ class BotWorker(threading.Thread):
                     )
 
             # Baca Stock
-            stock = self.engine.read_farmable_stock([data])
-            if stock is not None:
-                self.last_stock = stock
-                if stock <= 0 and not self._paused:
-                    log.info("[%s] Stok farmable habis (0). Membeli '%s'...", self.label, self.farmable_item)
-                    try:
-                        self.engine.buy_farmable(self.farmable_item)
-                        self.engine.goto("home")
-                        self.supabase.log_event(
-                            self.account_id,
-                            "SHOP_PURCHASE",
-                            "INFO",
-                            f"Auto-restock 20x {self.farmable_item} berhasil.",
-                        )
-                    except GemsExhaustedError:
-                        self._handle_critical_error("Gems habis saat mencoba auto-restock di toko.")
-                    except Exception as exc:
-                        log.warning("[%s] Gagal restock farmable: %s", self.label, exc)
+            try:
+                stock = self.engine.read_farmable_stock([data])
+                if stock is not None:
+                    self.last_stock = stock
+                    if stock <= 0 and not self._paused:
+                        log.info("[%s] Stok farmable habis (0). Membeli '%s'...", self.label, self.farmable_item)
+                        try:
+                            self.engine.buy_farmable(self.farmable_item)
+                            self.engine.goto("home")
+                            self.supabase.log_event(
+                                self.account_id,
+                                "SHOP_PURCHASE",
+                                "INFO",
+                                f"Auto-restock 20x {self.farmable_item} berhasil.",
+                            )
+                        except GemsExhaustedError:
+                            self._handle_critical_error("Gems habis saat mencoba auto-restock di toko.")
+                        except Exception as exc:
+                            log.warning("[%s] Gagal restock farmable: %s", self.label, exc)
+            except Exception as exc:
+                log.debug("[%s] Error baca stok: %s", self.label, exc)
 
             # Baca Buff
-            buffs = self.engine.read_active_buffs([data])
-            if buffs:
-                self._update_buff_cache(buffs)
+            try:
+                buffs = self.engine.read_active_buffs([data])
+                if buffs:
+                    self._update_buff_cache(buffs)
+            except Exception as exc:
+                log.debug("[%s] Error baca buff: %s", self.label, exc)
 
     def _update_buff_cache(self, buffs: Dict[str, str]):
         for name, dur_str in buffs.items():

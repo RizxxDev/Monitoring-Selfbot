@@ -113,6 +113,24 @@ class BotWorker(threading.Thread):
         self._paused = False
         self.command_queue.put({"command": "START"})
 
+    def update_config(
+        self,
+        farmable_item: Optional[str] = None,
+        gem_floor: Optional[int] = None,
+        label: Optional[str] = None,
+    ):
+        """Hot-reload konfigurasi tanpa memutus sesi Discord Gateway."""
+        if farmable_item is not None and farmable_item != self.farmable_item:
+            old_item = self.farmable_item
+            self.farmable_item = farmable_item
+            log.info("[%s] ⚡ Hot-reload farmable_item: '%s' -> '%s'", self.label, old_item, self.farmable_item)
+        if gem_floor is not None and int(gem_floor) != self.gem_floor:
+            old_floor = self.gem_floor
+            self.gem_floor = int(gem_floor)
+            log.info("[%s] ⚡ Hot-reload gem_floor: %d -> %d", self.label, old_floor, self.gem_floor)
+        if label is not None and label != self.label:
+            self.label = label
+
     def queue_command(self, cmd_dict: Dict[str, Any]):
         self.command_queue.put(cmd_dict)
 

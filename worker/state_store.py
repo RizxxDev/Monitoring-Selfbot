@@ -4,13 +4,14 @@ Menjamin nilai saldo Gems, Stok, dan Buff tetap tersimpan aman di disk lokal (at
 dan langsung dimuat saat worker startup tanpa pernah kembali ke 0.
 """
 
+import hashlib
 import json
 import logging
 import os
 import tempfile
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 log = logging.getLogger("growcord.state")
 
@@ -196,3 +197,143 @@ def save_account_state(
             except Exception:
                 pass
         return False
+
+
+# =====================================================================
+# MANAJEMEN CACHE DATA AKUN LOKAL (OFFLINE RESILIENCE & SMART HOT-RELOAD)
+# =====================================================================
+
+ACCOUNTS_CACHE_FILE = os.path.join(CACHE_DIR, "accounts.json")
+
+
+def compute_accounts_hash(accounts: List[Dict[str, Any]]) -> str:
+    """Menghitung hash SHA-256 representasi akun untuk mendeteksi perubahan cepat."""
+    if not accounts:
+        return ""
+    # Sortir akun berdasarkan ID agar konsisten
+    sorted_accs = sorted(accounts, key=lambda a: str(a.get("id", "")))
+    canonical = []
+    for a in sorted_accs:
+        canonical.append(
+            {
+                "id": str(a.get("id", "")),
+                "label": str(a.get("label", "")),
+                "encrypted_token": str(a.get("encrypted_token", "")),
+                "channel_id": str(a.get("channel_id", "")),
+                "farmable_item": str(a.get("farmable_item", "")),
+                "gem_floor": int(a.get("gem_floor", 0) or 0),
+                "status": str(a.get("status", "ACTIVE")),
+            }
+        )
+    raw_str = json.dumps(canonical, sort_keys=True)
+    return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
+
+
+def load_cached_accounts() -> List[Dict[str, Any]]:
+    """Memuat daftar akun tersimpan dari disk lokal."""
+    ensure_cache_dir()
+    if not os.path.isfile(ACCOUNTS_CACHE_FILE):
+        return []
+
+    try:
+        with open(ACCOUNTS_CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict) and "accounts" in data:
+                return data["accounts"]
+            elif isinstance(data, list):
+                return data
+    except Exception as exc:
+        log.warning("Gagal membaca cache akun lokal: %s", exc)
+
+    return []
+
+
+def save_cached_accounts(accounts: List[Dict[str, Any]]) -> bool:
+    """Menyimpan daftar konfigurasi akun ke disk lokal secara aman (Atomic Write)."""
+    ensure_cache_dir()
+    tmp_path = f"{ACCOUNTS_CACHE_FILE}.tmp"
+
+    payload = {
+        "synced_at": datetime.now(timezone.utc).isoformat(),
+        "accounts_hash": compute_accounts_hash(accounts),
+        "total_accounts": len(accounts),
+        "accounts": accounts,
+    }
+
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+
+        os.replace(tmp_path, ACCOUNTS_CACHE_FILE)
+        log.info("Daftar akun lokal berhasil disimpan (%d akun).", len(accounts))
+        return True
+    except Exception as exc:
+        log.warning("Gagal menyimpan cache akun lokal: %s", exc)
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        return False
+
+
+def detect_account_diff(
+    old_accounts: List[Dict[str, Any]],
+    new_accounts: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Menganalisis perbedaan konfigurasi antara cache lokal lama dan data baru.
+    Mengklasifikasikan perubahan menjadi:
+      - added: akun baru yang harus di-spawn
+      - removed: akun yang dihapus dan harus dimatikan
+      - hot_reload: perubahan parameter ringan (farmable_item, gem_floor, label) tanpa restart bot
+      - critical_reload: perubahan kritis (token, channel, status) yang perlu restart tertib
+    """
+    old_map = {str(a["id"]): a for a in old_accounts if "id" in a}
+    new_map = {str(a["id"]): a for a in new_accounts if "id" in a}
+
+    added: List[Dict[str, Any]] = []
+    removed: List[str] = []
+    hot_reload: List[Dict[str, Any]] = []
+    critical_reload: List[Dict[str, Any]] = []
+
+    # Cek akun baru & akun yang dimodifikasi
+    for acc_id, new_acc in new_map.items():
+        if acc_id not in old_map:
+            added.append(new_acc)
+        else:
+            old_acc = old_map[acc_id]
+
+            # 1. Cek parameter kritis
+            token_changed = new_acc.get("encrypted_token") != old_acc.get("encrypted_token")
+            channel_changed = str(new_acc.get("channel_id") or "") != str(old_acc.get("channel_id") or "")
+            status_changed = new_acc.get("status") != old_acc.get("status")
+
+            if token_changed or channel_changed or status_changed:
+                critical_reload.append(new_acc)
+            else:
+                # 2. Cek parameter ringan yang bisa di-hot-reload
+                item_changed = new_acc.get("farmable_item") != old_acc.get("farmable_item")
+                floor_changed = int(new_acc.get("gem_floor", 0) or 0) != int(old_acc.get("gem_floor", 0) or 0)
+                label_changed = new_acc.get("label") != old_acc.get("label")
+
+                if item_changed or floor_changed or label_changed:
+                    hot_reload.append(new_acc)
+
+    # Cek akun yang dihapus
+    for acc_id in old_map.keys():
+        if acc_id not in new_map:
+            removed.append(acc_id)
+
+    has_changes = bool(added or removed or hot_reload or critical_reload)
+
+    return {
+        "has_changes": has_changes,
+        "added": added,
+        "removed": removed,
+        "hot_reload": hot_reload,
+        "critical_reload": critical_reload,
+    }
+

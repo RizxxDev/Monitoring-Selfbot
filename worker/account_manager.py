@@ -3,7 +3,7 @@ import os
 import signal
 import sys
 import time
-from typing import Dict
+from typing import Any, Dict, List, Optional
 
 # Pastikan folder worker selalu ada di sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -11,6 +11,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bot_worker import BotWorker
 from crypto_utils import decrypt_token
 from notifier import DiscordNotifier
+from state_store import (
+    load_cached_accounts,
+    save_cached_accounts,
+    compute_accounts_hash,
+    detect_account_diff,
+)
 from supabase_client import SupabaseClient
 
 log = logging.getLogger("growcord.manager")
@@ -26,20 +32,75 @@ class AccountManager:
         self.workers: Dict[str, BotWorker] = {}
         self.running = False
 
-    def start(self):
-        """Memulai loop sinkronisasi multi-akun dan penanganan perintah remote."""
-        if not self.supabase.is_configured():
-            log.error("Supabase belum terkonfigurasi. Pastikan NEXT_PUBLIC_SUPABASE_URL dan KEY tersedia.")
+        # Cache akun lokal (Offline resilience & smart change detection)
+        self.cached_accounts: List[Dict[str, Any]] = load_cached_accounts()
+        self.accounts_hash: str = compute_accounts_hash(self.cached_accounts)
+        if self.cached_accounts:
+            log.info("[manager] Memuat %d akun dari cache lokal (accounts.json).", len(self.cached_accounts))
+
+    def _start_worker(self, acc: Dict[str, Any]):
+        """Menjalankan worker bot baru untuk satu akun."""
+        acc_id = acc["id"]
+        label = acc.get("label", "Unknown")
+        raw_token = acc.get("encrypted_token", "")
+        channel_id = acc.get("channel_id", "")
+        farmable_item = acc.get("farmable_item", "pot o' gems")
+        gem_floor = acc.get("gem_floor", 2000)
+
+        # Jika worker sudah ada dan masih berjalan, jangan buat dobel
+        if acc_id in self.workers and self.workers[acc_id].is_alive():
             return
 
+        log.info("[manager] Memulai worker baru untuk akun '%s' (%s)...", label, acc_id[:8])
+        try:
+            token = decrypt_token(raw_token)
+            new_worker = BotWorker(
+                account_id=acc_id,
+                label=label,
+                token=token,
+                channel_id=channel_id,
+                farmable_item=farmable_item,
+                gem_floor=gem_floor,
+                supabase=self.supabase,
+                notifier=self.notifier,
+            )
+            new_worker.start()
+            self.workers[acc_id] = new_worker
+        except Exception as exc:
+            log.error("[manager] Gagal memulai worker '%s': %s", label, exc)
+            if self.supabase.is_configured():
+                try:
+                    self.supabase.update_account_status(acc_id, "ERROR")
+                except Exception:
+                    pass
+
+    def _stop_worker(self, acc_id: str, label: str = ""):
+        """Menghentikan worker bot secara aman."""
+        worker = self.workers.pop(acc_id, None)
+        if worker:
+            log.info("[manager] Menghentikan worker akun '%s' (%s)...", label or acc_id[:8], acc_id[:8])
+            try:
+                worker.stop()
+            except Exception:
+                pass
+
+    def start(self):
+        """Memulai loop sinkronisasi multi-akun dan penanganan perintah remote."""
         self.running = True
         log.info("=" * 60)
         log.info(" MULTI-ACCOUNT DISCORD AUTOFARM WORKER ENGINE (SERVER A)")
-        log.info(" Connected to Supabase: %s", self.supabase.url)
+        log.info(" Connected to Supabase: %s", getattr(self.supabase, "url", "Offline"))
         log.info(" Discord Webhook Alert: %s", "Aktif" if self.notifier.is_configured() else "Nonaktif")
+        log.info(
+            " Local Accounts Cache: %s (%d akun tersimpan)",
+            "Tersedia" if self.cached_accounts else "Kosong",
+            len(self.cached_accounts),
+        )
         log.info("=" * 60)
 
-        last_acc_check = 0.0
+        # Lakukan sinkronisasi awal akun saat booting
+        self._sync_accounts()
+        last_acc_check = time.time()
 
         try:
             while self.running:
@@ -61,64 +122,92 @@ class AccountManager:
             self.stop_all()
 
     def _sync_accounts(self):
-        """Membaca tabel accounts dan menyinkronkan thread worker."""
-        accounts = self.supabase.get_accounts()
-        if not accounts:
-            log.debug("Belum ada akun di tabel accounts atau database kosong.")
-            return
+        """Membaca tabel accounts dari Supabase, membandingkan diff, dan memperbarui cache lokal."""
+        remote_accounts: Optional[List[Dict[str, Any]]] = None
+        if self.supabase.is_configured():
+            try:
+                remote_accounts = self.supabase.get_accounts()
+            except Exception as exc:
+                log.warning("[manager] Gagal menghubungi Supabase: %s. Beralih ke cache lokal...", exc)
 
-        db_active_ids = set()
+        # Skenario 1: Supabase aktif dan mengembalikan respons
+        if remote_accounts is not None:
+            diff = detect_account_diff(self.cached_accounts, remote_accounts)
 
-        for acc in accounts:
-            acc_id = acc["id"]
-            label = acc.get("label", "Unknown")
-            status = acc.get("status", "ACTIVE")
-            raw_token = acc.get("encrypted_token", "")
-            channel_id = acc.get("channel_id", "")
-            farmable_item = acc.get("farmable_item", "pot o' gems")
-            gem_floor = acc.get("gem_floor", 2000)
+            if diff["has_changes"] or not self.cached_accounts:
+                log.info(
+                    "[manager] Perubahan konfigurasi akun terdeteksi: +%d baru, -%d dihapus, ~%d hot-reload, ⚡%d kritis.",
+                    len(diff["added"]),
+                    len(diff["removed"]),
+                    len(diff["hot_reload"]),
+                    len(diff["critical_reload"]),
+                )
 
-            if status == "ACTIVE":
-                db_active_ids.add(acc_id)
-                # Jika belum berjalan atau thread sudah mati, nyalakan
-                worker = self.workers.get(acc_id)
-                if worker is None or not worker.is_alive():
-                    log.info("[manager] Memulai worker baru untuk akun '%s' (%s)...", label, acc_id[:8])
-                    try:
-                        token = decrypt_token(raw_token)
-                        new_worker = BotWorker(
-                            account_id=acc_id,
-                            label=label,
-                            token=token,
-                            channel_id=channel_id,
-                            farmable_item=farmable_item,
-                            gem_floor=gem_floor,
-                            supabase=self.supabase,
-                            notifier=self.notifier,
+                # A. Hot-reload parameter ringan tanpa putus sesi Discord
+                for acc in diff["hot_reload"]:
+                    acc_id = acc["id"]
+                    worker = self.workers.get(acc_id)
+                    if worker and worker.is_alive():
+                        worker.update_config(
+                            farmable_item=acc.get("farmable_item"),
+                            gem_floor=acc.get("gem_floor"),
+                            label=acc.get("label"),
                         )
-                        new_worker.start()
-                        self.workers[acc_id] = new_worker
-                    except Exception as exc:
-                        log.error("[manager] Gagal memulai worker '%s': %s", label, exc)
-                        self.supabase.update_account_status(acc_id, "ERROR")
 
-            elif status in ("PAUSED", "OFFLINE"):
-                # Jika status di DB diubah jadi PAUSED/OFFLINE tapi worker masih jalan, hentikan
-                if acc_id in self.workers:
-                    log.info("[manager] Akun '%s' berstatus %s, menghentikan worker...", label, status)
-                    worker = self.workers.pop(acc_id)
-                    worker.stop()
+                # B. Perubahan kritis (token baru, pindah channel, atau perubahan status)
+                for acc in diff["critical_reload"]:
+                    acc_id = acc["id"]
+                    self._stop_worker(acc_id, acc.get("label", ""))
+                    if acc.get("status") == "ACTIVE":
+                        self._start_worker(acc)
 
-        # Bersihkan worker yang tidak lagi ada di tabel
-        all_db_ids = {a["id"] for a in accounts}
-        for running_id in list(self.workers.keys()):
-            if running_id not in all_db_ids:
-                log.info("[manager] Akun %s dihapus dari database, menghentikan worker...", running_id[:8])
-                self.workers.pop(running_id).stop()
+                # C. Akun baru ditambahkan lewat dashboard
+                for acc in diff["added"]:
+                    if acc.get("status") == "ACTIVE":
+                        self._start_worker(acc)
+
+                # D. Akun dihapus dari dashboard
+                for acc_id in diff["removed"]:
+                    self._stop_worker(acc_id)
+
+                # Perbarui file cache lokal di disk secara aman (Atomic Write)
+                save_cached_accounts(remote_accounts)
+                self.cached_accounts = remote_accounts
+                self.accounts_hash = compute_accounts_hash(remote_accounts)
+
+            else:
+                # Tidak ada perubahan diff; pastikan akun berstatus ACTIVE yang mati otomatis di-restart
+                for acc in remote_accounts:
+                    acc_id = acc["id"]
+                    if acc.get("status") == "ACTIVE":
+                        worker = self.workers.get(acc_id)
+                        if worker is None or not worker.is_alive():
+                            self._start_worker(acc)
+                    elif acc.get("status") in ("PAUSED", "OFFLINE"):
+                        if acc_id in self.workers:
+                            self._stop_worker(acc_id, acc.get("label", ""))
+
+        # Skenario 2: Offline Fallback (Internet atau Supabase down)
+        else:
+            if self.cached_accounts:
+                log.info("[manager] [OFFLINE MODE] Menjalankan bot dari cache lokal (%d akun)...", len(self.cached_accounts))
+                for acc in self.cached_accounts:
+                    if acc.get("status") == "ACTIVE":
+                        acc_id = acc["id"]
+                        worker = self.workers.get(acc_id)
+                        if worker is None or not worker.is_alive():
+                            self._start_worker(acc)
 
     def _process_pending_commands(self):
         """Mengecek antrean perintah remote di bot_commands."""
-        commands = self.supabase.get_pending_commands()
+        if not self.supabase.is_configured():
+            return
+
+        try:
+            commands = self.supabase.get_pending_commands()
+        except Exception:
+            return
+
         if not commands:
             return
 
@@ -133,7 +222,6 @@ class AccountManager:
             worker = self.workers.get(acc_id)
 
             if command == "START":
-                # Jika worker belum jalan, perbarui status akun & nyalakan
                 self.supabase.update_account_status(acc_id, "ACTIVE")
                 self.supabase.set_command_status(cmd_id, "EXECUTED")
                 self._sync_accounts()

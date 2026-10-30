@@ -157,6 +157,12 @@ class SupabaseClient:
         """Menyimpan snapshot metrik telemetri ke tabel metrics_history."""
         if not self.is_configured():
             return False
+
+        # Guard: Hindari menyimpan log metrik kosong (0, 0)
+        if int(gems_balance) <= 0 and int(stock_remaining) <= 0:
+            log.warning("Menolak report metrics kosong (gems=0, stock=0) untuk %s", account_id)
+            return False
+
         payload = {
             "account_id": account_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),

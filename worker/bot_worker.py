@@ -179,7 +179,7 @@ class BotWorker(threading.Thread):
                     pass
 
     def _main_monitoring_loop(self):
-        last_telemetry_time = 0.0
+        last_telemetry_time = time.time()
         consecutive_gw_errors = 0
 
         while self._running:
@@ -349,7 +349,14 @@ class BotWorker(threading.Thread):
             ping_ms = getattr(self.gw, "latency_ms", 45) or 45
             is_farming = not self._paused and getattr(self.engine, "autofarm_state", "ON") == "ON"
 
+            # Selalu perbarui heartbeat akun
             self.supabase.update_heartbeat(self.account_id, ping_ms)
+
+            # Guard: Jangan kirim snapshot jika data embed belum pernah terbaca (gems & stock masih 0)
+            if self.last_gems <= 0 and self.last_stock <= 0:
+                log.debug("[%s] Melewati simpan metrics_history karena data belum siap (gems/stock masih 0).", self.label)
+                return
+
             self.supabase.report_metrics(
                 account_id=self.account_id,
                 gems_balance=self.last_gems,

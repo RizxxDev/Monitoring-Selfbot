@@ -20,13 +20,27 @@ class DiscordNotifier:
             self._try_load_env()
 
     def _try_load_env(self):
-        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env.local")
-        if os.path.exists(env_path):
-            with open(env_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("DISCORD_ALERT_WEBHOOK_URL="):
-                        self.webhook_url = line.split("=", 1)[1].strip()
+        worker_dir = os.path.dirname(os.path.abspath(__file__))
+        root_dir = os.path.dirname(worker_dir)
+        candidates = [
+            os.path.join(worker_dir, ".env"),
+            os.path.join(worker_dir, ".env.local"),
+            os.path.join(root_dir, ".env"),
+            os.path.join(root_dir, ".env.local"),
+            os.path.join(os.getcwd(), ".env"),
+            os.path.join(os.getcwd(), ".env.local"),
+        ]
+        for path in candidates:
+            if os.path.isfile(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith("DISCORD_ALERT_WEBHOOK_URL="):
+                                self.webhook_url = line.split("=", 1)[1].strip().strip("'\"")
+                                return
+                except Exception:
+                    pass
 
     def is_configured(self) -> bool:
         return bool(self.webhook_url and self.webhook_url.startswith("https://discord.com/api/webhooks/"))

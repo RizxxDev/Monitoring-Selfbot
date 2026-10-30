@@ -7,15 +7,31 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("growcord.supabase")
 
+# Default credentials ke project Supabase aktif
+DEFAULT_SUPABASE_URL = "https://kwogpweprnkpqquasshr.supabase.co"
+DEFAULT_SUPABASE_KEY = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt3b2dwd2Vwcm5rcHFxdWFzc2hyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMzNjY2NTYsImV4cCI6MjEwODk0MjY1Nn0.oxiKZgrDdvi4NTz6NE9haX0jG4ohVixCmAupzdNQ3iE"
+)
+
 
 class SupabaseClient:
     def __init__(self, url: Optional[str] = None, key: Optional[str] = None):
         self.url = (url or os.getenv("NEXT_PUBLIC_SUPABASE_URL", "")).rstrip("/")
         self.key = key or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
 
+        # Jika belum ada di env, cari di berbagai lokasi file .env
         if not self.url or not self.key:
-            # Fallback to reading .env.local in parent directory
-            self._try_load_env_local()
+            self._load_from_all_env_files()
+
+        # Coba juga dari worker/config.py jika ada
+        if not self.url or not self.key:
+            self._try_load_from_config()
+
+        # Fallback terakhir ke default project yang sudah dibuat
+        if not self.url:
+            self.url = DEFAULT_SUPABASE_URL
+        if not self.key:
+            self.key = DEFAULT_SUPABASE_KEY
 
         self.rest_url = f"{self.url}/rest/v1"
         self.headers = {
@@ -25,16 +41,54 @@ class SupabaseClient:
             "Prefer": "return=representation",
         }
 
-    def _try_load_env_local(self):
-        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env.local")
-        if os.path.exists(env_path):
-            with open(env_path, "r", encoding="utf-8") as f:
+    def _load_from_all_env_files(self):
+        worker_dir = os.path.dirname(os.path.abspath(__file__))
+        root_dir = os.path.dirname(worker_dir)
+        candidates = [
+            os.path.join(worker_dir, ".env"),
+            os.path.join(worker_dir, ".env.local"),
+            os.path.join(root_dir, ".env"),
+            os.path.join(root_dir, ".env.local"),
+            os.path.join(os.getcwd(), ".env"),
+            os.path.join(os.getcwd(), ".env.local"),
+        ]
+
+        for path in candidates:
+            if os.path.isfile(path):
+                self._parse_env_file(path)
+                if self.url and self.key:
+                    break
+
+    def _parse_env_file(self, filepath: str):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
-                    if line.startswith("NEXT_PUBLIC_SUPABASE_URL="):
-                        self.url = line.split("=", 1)[1].strip().rstrip("/")
-                    elif line.startswith("NEXT_PUBLIC_SUPABASE_ANON_KEY="):
-                        self.key = line.split("=", 1)[1].strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        # Hapus tanda kutip jika ada
+                        v = v.strip().strip("'\"")
+                        if (k in ("NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_URL")) and not self.url:
+                            self.url = v.rstrip("/")
+                            os.environ["NEXT_PUBLIC_SUPABASE_URL"] = self.url
+                        elif (k in ("NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_ANON_KEY", "SUPABASE_KEY")) and not self.key:
+                            self.key = v
+                            os.environ["NEXT_PUBLIC_SUPABASE_ANON_KEY"] = self.key
+        except Exception:
+            pass
+
+    def _try_load_from_config(self):
+        try:
+            import config as cfg
+            if hasattr(cfg, "SUPABASE_URL") and getattr(cfg, "SUPABASE_URL"):
+                self.url = getattr(cfg, "SUPABASE_URL").rstrip("/")
+            if hasattr(cfg, "SUPABASE_KEY") and getattr(cfg, "SUPABASE_KEY"):
+                self.key = getattr(cfg, "SUPABASE_KEY")
+        except Exception:
+            pass
 
     def is_configured(self) -> bool:
         return bool(self.url and self.key)

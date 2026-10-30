@@ -25,6 +25,8 @@ import { Account, EventLog, MetricHistory } from '@/lib/types';
 import { FARMABLE_ITEMS } from '@/lib/constants';
 import { simulationStore } from '@/lib/simulation-store';
 import { generateMockMetricsHistory } from '@/lib/mock-data';
+import { isSupabaseConfigured } from '@/lib/supabase';
+import { SupabaseDataService } from '@/lib/supabase-service';
 import { BuffIndicator } from '@/components/dashboard/BuffIndicator';
 import { GemsTimeSeriesChart } from '@/components/charts/GemsTimeSeriesChart';
 import { Header } from '@/components/dashboard/Header';
@@ -59,21 +61,34 @@ function AccountDetailPage() {
   useEffect(() => {
     simulationStore.init();
 
-    const loadData = () => {
-      const acc = simulationStore.getAccountById(accountId);
+    const loadData = async () => {
+      let acc = simulationStore.getAccountById(accountId);
+      if (!acc && isSupabaseConfigured) {
+        acc = (await SupabaseDataService.getAccountById(accountId)) || undefined;
+      }
+
       if (acc) {
         setAccount(acc);
         setLabel(acc.label);
         setChannelId(acc.channel_id);
         setFarmableItem(acc.farmable_item);
         setGemFloor(acc.gem_floor);
-        setLogs(simulationStore.getLogs(accountId));
+
+        if (isSupabaseConfigured) {
+          const [dbHistory, dbLogs] = await Promise.all([
+            SupabaseDataService.getMetricsHistory(accountId),
+            SupabaseDataService.getEventLogs(accountId),
+          ]);
+          setMetricsHistory(
+            dbHistory.length > 0 ? dbHistory : generateMockMetricsHistory(accountId, acc.metrics?.gems_balance || 140000)
+          );
+          setLogs(dbLogs.length > 0 ? dbLogs : simulationStore.getLogs(accountId));
+        } else {
+          setLogs(simulationStore.getLogs(accountId));
+          setMetricsHistory(generateMockMetricsHistory(accountId, 140000));
+        }
       }
     };
-
-    loadData();
-    // Generate initial historical points for the chart
-    setMetricsHistory(generateMockMetricsHistory(accountId, 140000));
 
     const unsubscribe = simulationStore.subscribe(() => {
       loadData();

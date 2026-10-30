@@ -3,6 +3,8 @@
 import { Account, EventLog, BotCommand, CommandType } from './types';
 import { INITIAL_MOCK_ACCOUNTS, INITIAL_MOCK_LOGS, generateMockMetricsHistory } from './mock-data';
 import { BUFF_CONFIG } from './constants';
+import { SupabaseDataService } from './supabase-service';
+import { isSupabaseConfigured } from './supabase';
 
 type Listener = () => void;
 
@@ -15,17 +17,29 @@ class SimulationStore {
   private isClient = false;
   private nextLogId = 1000;
   private nextCommandId = 500;
+  private unsubscribeRealtime: (() => void) | null = null;
 
   constructor() {
     this.accounts = JSON.parse(JSON.stringify(INITIAL_MOCK_ACCOUNTS));
     this.logs = JSON.parse(JSON.stringify(INITIAL_MOCK_LOGS));
   }
 
-  public init() {
+  public async init() {
     if (this.isClient) return;
     this.isClient = true;
 
-    // Load from localStorage if present
+    // Check if Supabase is active
+    if (isSupabaseConfigured && SupabaseDataService.isEnabled()) {
+      await this.refreshFromSupabase();
+
+      // Subscribe to Supabase Realtime pub/sub
+      this.unsubscribeRealtime = SupabaseDataService.subscribeRealtime(async () => {
+        await this.refreshFromSupabase();
+      });
+      return;
+    }
+
+    // Otherwise use Local Demo / Mock Mode
     if (typeof window !== 'undefined') {
       try {
         const storedAccounts = localStorage.getItem('gc_monitor_accounts');
@@ -37,11 +51,10 @@ class SimulationStore {
           this.logs = JSON.parse(storedLogs);
         }
       } catch (e) {
-        // Fallback to initial
+        // Fallback
       }
     }
 
-    // Start 1-second simulation clock
     if (!this.timer) {
       this.timer = setInterval(() => {
         this.tick();
@@ -49,13 +62,26 @@ class SimulationStore {
     }
   }
 
+  public async refreshFromSupabase() {
+    try {
+      const realAccounts = await SupabaseDataService.getAccounts();
+      const realLogs = await SupabaseDataService.getEventLogs();
+      this.accounts = realAccounts;
+      this.logs = realLogs;
+      this.notify();
+    } catch (e) {
+      console.error('Error refreshing from Supabase:', e);
+    }
+  }
+
   private saveToStorage() {
+    if (isSupabaseConfigured) return;
     if (typeof window !== 'undefined') {
       try {
         localStorage.setItem('gc_monitor_accounts', JSON.stringify(this.accounts));
         localStorage.setItem('gc_monitor_logs', JSON.stringify(this.logs.slice(0, 100)));
       } catch (e) {
-        // Storage full or quota exceeded
+        // Storage quota
       }
     }
   }
@@ -72,6 +98,8 @@ class SimulationStore {
   }
 
   private tick() {
+    if (isSupabaseConfigured) return; // Live mode uses real bot metrics from Supabase
+
     let changed = false;
     const now = new Date();
 
@@ -81,20 +109,16 @@ class SimulationStore {
       changed = true;
       const m = { ...acc.metrics };
 
-      // Decrement buff countdowns
       if (m.buff_clover_sec > 0) m.buff_clover_sec -= 1;
       if (m.buff_arroz_sec > 0) m.buff_arroz_sec -= 1;
       if (m.buff_benedict_sec > 0) m.buff_benedict_sec -= 1;
 
-      // Increment gems periodically (approx 1-2 gems every 2-3 seconds ~ 2000/hr)
       if (Math.random() < 0.45) {
         m.gems_balance += Math.floor(Math.random() * 3) + 1;
       }
 
-      // Decrement stock occasionally and simulate consumption
       if (Math.random() < 0.03 && m.stock_remaining > 0) {
         m.stock_remaining -= 1;
-        // If stock hits 0, auto-restock simulation
         if (m.stock_remaining === 0 && m.gems_balance > acc.gem_floor + 2000) {
           m.stock_remaining += 20;
           m.gems_balance -= 2000;
@@ -108,12 +132,10 @@ class SimulationStore {
         }
       }
 
-      // Slightly fluctuate ping
       if (Math.random() < 0.1) {
         m.gateway_ping_ms = Math.max(28, Math.min(120, m.gateway_ping_ms + (Math.floor(Math.random() * 7) - 3)));
       }
 
-      // Random anti-AFK event every ~60 seconds
       if (Math.random() < 0.012) {
         const latency = (Math.random() * 0.8 + 0.9).toFixed(2);
         this.addEventLog({
@@ -151,7 +173,7 @@ class SimulationStore {
     return this.logs.filter((l) => l.account_id === accountId);
   }
 
-  public addEventLog(log: Omit<EventLog, 'id' | 'timestamp'>) {
+  public async addEventLog(log: Omit<EventLog, 'id' | 'timestamp'>) {
     const newLog: EventLog = {
       ...log,
       id: ++this.nextLogId,
@@ -166,7 +188,20 @@ class SimulationStore {
   }
 
   // Remote Actions
-  public dispatchCommand(accountId: string, command: CommandType, payload?: Record<string, unknown>): BotCommand {
+  public async dispatchCommand(accountId: string, command: CommandType, payload?: Record<string, unknown>): Promise<BotCommand> {
+    if (isSupabaseConfigured) {
+      const cmd = await SupabaseDataService.dispatchCommand(accountId, command, payload);
+      await this.refreshFromSupabase();
+      return cmd || {
+        id: ++this.nextCommandId,
+        account_id: accountId,
+        command,
+        payload,
+        status: 'PENDING',
+        created_at: new Date().toISOString(),
+      };
+    }
+
     const account = this.getAccountById(accountId);
     const newCommand: BotCommand = {
       id: ++this.nextCommandId,
@@ -231,7 +266,18 @@ class SimulationStore {
     return newCommand;
   }
 
-  public startAll() {
+  public async startAll() {
+    if (isSupabaseConfigured) {
+      for (const a of this.accounts) {
+        if (a.status !== 'ACTIVE') {
+          await SupabaseDataService.dispatchCommand(a.id, 'START');
+          await SupabaseDataService.updateAccount(a.id, { status: 'ACTIVE' });
+        }
+      }
+      await this.refreshFromSupabase();
+      return;
+    }
+
     this.accounts = this.accounts.map((a) => {
       if (a.status === 'PAUSED' || a.status === 'OFFLINE') {
         if (a.metrics) a.metrics.is_farming = true;
@@ -249,7 +295,18 @@ class SimulationStore {
     this.saveToStorage();
   }
 
-  public pauseAll() {
+  public async pauseAll() {
+    if (isSupabaseConfigured) {
+      for (const a of this.accounts) {
+        if (a.status === 'ACTIVE') {
+          await SupabaseDataService.dispatchCommand(a.id, 'PAUSE');
+          await SupabaseDataService.updateAccount(a.id, { status: 'PAUSED' });
+        }
+      }
+      await this.refreshFromSupabase();
+      return;
+    }
+
     this.accounts = this.accounts.map((a) => {
       if (a.status === 'ACTIVE') {
         if (a.metrics) a.metrics.is_farming = false;
@@ -267,7 +324,20 @@ class SimulationStore {
     this.saveToStorage();
   }
 
-  public addAccount(accountData: Omit<Account, 'id' | 'created_at' | 'updated_at' | 'last_heartbeat'>): Account {
+  public async addAccount(accountData: Omit<Account, 'id' | 'created_at' | 'updated_at' | 'last_heartbeat'>): Promise<Account> {
+    if (isSupabaseConfigured) {
+      const created = await SupabaseDataService.addAccount({
+        label: accountData.label,
+        encrypted_token: accountData.encrypted_token,
+        channel_id: accountData.channel_id,
+        farmable_item: accountData.farmable_item,
+        gem_floor: accountData.gem_floor,
+        avatar_url: accountData.avatar_url,
+      });
+      await this.refreshFromSupabase();
+      if (created) return created;
+    }
+
     const newAcc: Account = {
       ...accountData,
       id: 'acc-' + Math.random().toString(36).substring(2, 9),
@@ -296,7 +366,13 @@ class SimulationStore {
     return newAcc;
   }
 
-  public updateAccount(id: string, updates: Partial<Account>): Account | undefined {
+  public async updateAccount(id: string, updates: Partial<Account>): Promise<Account | undefined> {
+    if (isSupabaseConfigured) {
+      await SupabaseDataService.updateAccount(id, updates);
+      await this.refreshFromSupabase();
+      return this.getAccountById(id);
+    }
+
     const idx = this.accounts.findIndex((a) => a.id === id);
     if (idx === -1) return undefined;
     this.accounts[idx] = {
@@ -315,7 +391,13 @@ class SimulationStore {
     return this.accounts[idx];
   }
 
-  public deleteAccount(id: string): boolean {
+  public async deleteAccount(id: string): Promise<boolean> {
+    if (isSupabaseConfigured) {
+      await SupabaseDataService.deleteAccount(id);
+      await this.refreshFromSupabase();
+      return true;
+    }
+
     const acc = this.getAccountById(id);
     this.accounts = this.accounts.filter((a) => a.id !== id);
     if (acc) {
@@ -339,5 +421,4 @@ class SimulationStore {
   }
 }
 
-// Singleton simulation store instance
 export const simulationStore = new SimulationStore();

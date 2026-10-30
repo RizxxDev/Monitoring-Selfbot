@@ -143,16 +143,24 @@ export function AccountCard({ account, onOpenDrawer }: AccountCardProps) {
         {/* Gems & Stock Data */}
         <div className="grid grid-cols-2 gap-2 mb-4 p-3 bg-[#101115] rounded-xl border border-white/5">
           <div>
-            <span className="text-[10px] font-medium uppercase text-gray-400 tracking-wider">Saldo Gems</span>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-medium uppercase text-gray-400 tracking-wider">Saldo Gems</span>
+              {m && m.gems_balance > 0 && !isRunning && (
+                <span className="text-[9px] text-gray-500 font-medium">Tersimpan</span>
+              )}
+            </div>
             <div className="text-lg font-extrabold text-white tracking-tight flex items-center gap-1 mt-0.5">
-              <span>{m?.gems_balance.toLocaleString() ?? 0}</span>
+              <span>{m && m.gems_balance > 0 ? m.gems_balance.toLocaleString() : 'Menghubungkan...'}</span>
               <span className="text-xs text-discord-blurple">💎</span>
             </div>
           </div>
           <div>
-            <span className="text-[10px] font-medium uppercase text-gray-400 tracking-wider">Stok Farmable</span>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-medium uppercase text-gray-400 tracking-wider">Stok Farmable</span>
+              <span className="text-[9px] text-gray-500 font-medium truncate max-w-[60px]">{getHeartbeatDisplay()}</span>
+            </div>
             <div className="text-lg font-extrabold text-white tracking-tight flex items-baseline gap-1 mt-0.5">
-              <span>{m?.stock_remaining ?? 0}</span>
+              <span>{m ? m.stock_remaining : 0}</span>
               <span className="text-[11px] font-medium text-amber-400 truncate max-w-[80px]">
                 {account.farmable_item}
               </span>

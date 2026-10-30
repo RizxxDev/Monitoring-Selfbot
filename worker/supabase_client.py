@@ -181,6 +181,25 @@ class SupabaseClient:
             log.error("Gagal report metrics %s: %s", account_id, exc)
             return False
 
+    def get_latest_metrics(self, account_id: str) -> Optional[Dict[str, Any]]:
+        """Mengambil snapshot metrik valid terakhir dari Supabase untuk bootstrap awal."""
+        if not self.is_configured():
+            return None
+        try:
+            url = (
+                f"{self.rest_url}/metrics_history"
+                f"?account_id=eq.{account_id}&gems_balance=gt.0"
+                f"&order=timestamp.desc&limit=1"
+            )
+            res = requests.get(url, headers=self.headers, timeout=6)
+            if res.status_code == 200:
+                rows = res.json()
+                if rows and isinstance(rows, list) and len(rows) > 0:
+                    return rows[0]
+        except Exception as exc:
+            log.debug("Gagal mengambil latest metrics untuk %s: %s", account_id, exc)
+        return None
+
     def log_event(
         self,
         account_id: str,

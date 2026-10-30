@@ -27,6 +27,7 @@ export class SupabaseDataService {
           .from('metrics_history')
           .select('*')
           .eq('account_id', acc.id)
+          .gt('gems_balance', 0)
           .order('timestamp', { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -83,6 +84,7 @@ export class SupabaseDataService {
       .from('metrics_history')
       .select('*')
       .eq('account_id', id)
+      .gt('gems_balance', 0)
       .order('timestamp', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -182,6 +184,7 @@ export class SupabaseDataService {
       .from('metrics_history')
       .select('*')
       .eq('account_id', accountId)
+      .gt('gems_balance', 0)
       .order('timestamp', { ascending: true })
       .limit(100);
 

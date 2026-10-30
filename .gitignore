@@ -37,6 +37,8 @@ next-env.d.ts
 # Python & Worker secrets
 config.py
 worker/config.py
+worker/.cache/
+.cache/
 *.log
 runs.log
 __pycache__/

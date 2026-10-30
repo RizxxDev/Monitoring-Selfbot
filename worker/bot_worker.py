@@ -24,6 +24,7 @@ from autofarm import (
     USER_AGENT,
 )
 from notifier import DiscordNotifier
+from state_store import load_account_state, save_account_state
 from supabase_client import SupabaseClient
 
 log = logging.getLogger("growcord.worker")
@@ -82,12 +83,16 @@ class BotWorker(threading.Thread):
         self.gw: Optional[Gateway] = None
         self.engine: Optional[Engine] = None
 
-        # Telemetri cache
-        self.last_gems = 0
-        self.last_stock = 0
-        self.last_buff_clover = 0
-        self.last_buff_arroz = 0
-        self.last_buff_benedict = 0
+        # Telemetri cache: langsung muat dari local file cache / fallback Supabase
+        cached = load_account_state(
+            account_id=self.account_id,
+            fallback_fetcher=lambda: self.supabase.get_latest_metrics(self.account_id) if self.supabase else None,
+        )
+        self.last_gems = int(cached.get("gems_balance", 0))
+        self.last_stock = int(cached.get("stock_remaining", 0))
+        self.last_buff_clover = int(cached.get("buff_clover_sec", 0))
+        self.last_buff_arroz = int(cached.get("buff_arroz_sec", 0))
+        self.last_buff_benedict = int(cached.get("buff_benedict_sec", 0))
 
     def stop(self):
         """Meminta worker berhenti secara tertib."""
@@ -331,6 +336,17 @@ class BotWorker(threading.Thread):
                     self._update_buff_cache(buffs)
             except Exception as exc:
                 log.debug("[%s] Error baca buff: %s", self.label, exc)
+
+            # Persistensikan snapshot status ke file cache lokal (Atomic Write)
+            if self.last_gems > 0:
+                save_account_state(
+                    account_id=self.account_id,
+                    gems=self.last_gems,
+                    stock=self.last_stock,
+                    buff_clover=self.last_buff_clover,
+                    buff_arroz=self.last_buff_arroz,
+                    buff_benedict=self.last_buff_benedict,
+                )
 
     def _update_buff_cache(self, buffs: Dict[str, str]):
         for name, dur_str in buffs.items():

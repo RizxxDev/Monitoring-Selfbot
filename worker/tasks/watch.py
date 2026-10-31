@@ -12,7 +12,7 @@ def _one_cycle(engine):
     screen, msg = engine.goto("home")
     stock = engine.read_farmable_stock(msg)
     if stock is not None and stock <= 0:
-        farmable_item = getattr(cfg, "FARMABLE_ITEM", "pot o' gems")
+        farmable_item = getattr(cfg, "FARMABLE_ITEM", "Pot O' Gems")
         log.warning("[watch] Stock farmable kosong (%s) -> Beli %s", stock, farmable_item)
         engine.buy_farmable(farmable_item)
 

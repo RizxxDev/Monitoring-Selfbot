@@ -144,7 +144,7 @@ def _prepare_autofarm(engine):
 
     # Jika stok habis
     if stock is not None and stock <= 0:
-        farmable_item = getattr(cfg, "FARMABLE_ITEM", "pot o' gems")
+        farmable_item = getattr(cfg, "FARMABLE_ITEM", "Pot O' Gems")
         log.warning(
             "[autofarm] Stock farmable kosong (%s)! Menuju Toko -> Farmable -> '%s' (Buy Max)...",
             stock,
@@ -243,7 +243,7 @@ def _full_autofarm_loop(engine, args):
 
                             # Kasus A: Stok habis
                             if stock is not None and stock <= 0:
-                                farmable_item = getattr(cfg, "FARMABLE_ITEM", "pot o' gems")
+                                farmable_item = getattr(cfg, "FARMABLE_ITEM", "Pot O' Gems")
                                 log.warning(
                                     "[autofarm] Terdeteksi stock farmable HABIS (%s)! Membeli '%s' (Buy Max)...",
                                     stock,
@@ -333,7 +333,7 @@ def _full_autofarm_loop(engine, args):
                     )
 
                     if stock is not None and stock <= 0:
-                        farmable_item = getattr(cfg, "FARMABLE_ITEM", "pot o' gems")
+                        farmable_item = getattr(cfg, "FARMABLE_ITEM", "Pot O' Gems")
                         log.warning("[autofarm] Heartbeat: Stock habis! Membeli ulang...")
                         engine.buy_farmable(farmable_item)
                         screen, msg = engine.goto("home")

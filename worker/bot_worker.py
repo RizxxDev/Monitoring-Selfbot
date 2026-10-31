@@ -22,6 +22,7 @@ from autofarm import (
     has_buff,
     GROWCORD_APP_ID,
     USER_AGENT,
+    FARMABLE_ITEMS,
 )
 from notifier import DiscordNotifier
 from state_store import load_account_state, save_account_state
@@ -59,7 +60,7 @@ class BotWorker(threading.Thread):
         label: str,
         token: str,
         channel_id: str,
-        farmable_item: str = "pot o' gems",
+        farmable_item: str = "Pot O' Gems",
         gem_floor: int = 2000,
         supabase: Optional[SupabaseClient] = None,
         notifier: Optional[DiscordNotifier] = None,
@@ -69,7 +70,7 @@ class BotWorker(threading.Thread):
         self.label = label
         self.token = token
         self.channel_id = str(channel_id)
-        self.farmable_item = farmable_item or "pot o' gems"
+        self.farmable_item = farmable_item or "Pot O' Gems"
         self.gem_floor = gem_floor
 
         self.supabase = supabase or SupabaseClient()

@@ -34,7 +34,18 @@ MODAL_FIELD_CUSTOM_ID = ""
 WATCH_MINUTES    = 30      # jeda antar siklus watch (menit)
 WATCH_BUY_GEMS   = 20000   # buy_wl hanya jika gems > nilai ini (0 = selalu)
 WATCH_ITERATIONS = 0       # jumlah siklus; 0 = terus sampai Ctrl+C
-FARMABLE_ITEM    = "pot o' gems"  # item farmable yang dibeli di Toko jika stock kosong
+# ================== PILIHAN FARMABLE TOKO GROWCORD ==================
+# Opsi resmi: "Pot O' Gems", "Crystal Block", "Game Grave", "Rich Crystal", "Diamond Ore", "Diamond Block", "Void Crystal Ore"
+FARMABLE_ITEMS = [
+    "Pot O' Gems",
+    "Crystal Block",
+    "Game Grave",
+    "Rich Crystal",
+    "Diamond Ore",
+    "Diamond Block",
+    "Void Crystal Ore",
+]
+FARMABLE_ITEM    = "Pot O' Gems"  # item farmable yang dibeli di Toko jika stock kosong
 AUTOFARM_CHECK_INTERVAL = 300     # interval cek berkala saat autofarm idle (detik)
 
 # ================== PENDETEKSI GAGAL ==================

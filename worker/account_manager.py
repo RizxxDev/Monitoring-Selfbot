@@ -44,7 +44,7 @@ class AccountManager:
         label = acc.get("label", "Unknown")
         raw_token = acc.get("encrypted_token", "")
         channel_id = acc.get("channel_id", "")
-        farmable_item = acc.get("farmable_item", "pot o' gems")
+        farmable_item = acc.get("farmable_item", "Pot O' Gems")
         gem_floor = acc.get("gem_floor", 2000)
 
         # Jika worker sudah ada dan masih berjalan, jangan buat dobel

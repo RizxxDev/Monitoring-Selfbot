@@ -57,8 +57,19 @@ TOKEN = get_conf("TOKEN", os.getenv("DISCORD_TOKEN", ""))
 CHANNEL_ID = str(get_conf("CHANNEL_ID", os.getenv("GROWCORD_CHANNEL", "")))
 GROWCORD_APP_ID = get_conf("GROWCORD_APP_ID", "")
 
-# Item farmable yang dibeli saat stock habis
-FARMABLE_ITEM = get_conf("FARMABLE_ITEM", "pot o' gems")
+# Daftar resmi item farmable yang ada di Toko Farmable Growcord
+FARMABLE_ITEMS = [
+    "Pot O' Gems",
+    "Crystal Block",
+    "Game Grave",
+    "Rich Crystal",
+    "Diamond Ore",
+    "Diamond Block",
+    "Void Crystal Ore",
+]
+
+# Item farmable yang dibeli saat stock habis (default: Pot O' Gems)
+FARMABLE_ITEM = get_conf("FARMABLE_ITEM", "Pot O' Gems")
 
 # Interval pengecekan berkala (detik) saat sedang standby
 CHECK_INTERVAL = int(get_conf("AUTOFARM_CHECK_INTERVAL", 300))

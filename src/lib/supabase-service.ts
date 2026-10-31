@@ -145,13 +145,21 @@ export class SupabaseDataService {
       })
       .eq('id', id);
 
-    return !error;
+    if (error) {
+      console.error('Error updating account in Supabase:', error);
+      throw error;
+    }
+    return true;
   }
 
   public static async deleteAccount(id: string): Promise<boolean> {
     if (!supabase) return false;
     const { error } = await supabase.from('accounts').delete().eq('id', id);
-    return !error;
+    if (error) {
+      console.error('Error deleting account in Supabase:', error);
+      throw error;
+    }
+    return true;
   }
 
   public static async dispatchCommand(

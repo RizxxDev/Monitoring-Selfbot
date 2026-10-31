@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -58,6 +58,8 @@ function AccountDetailPage() {
   const [gemFloor, setGemFloor] = useState<number>(2000);
   const [isSaving, setIsSaving] = useState(false);
 
+  const formInitialized = useRef(false);
+
   useEffect(() => {
     simulationStore.init();
 
@@ -69,10 +71,13 @@ function AccountDetailPage() {
 
       if (acc) {
         setAccount(acc);
-        setLabel(acc.label);
-        setChannelId(acc.channel_id);
-        setFarmableItem(acc.farmable_item);
-        setGemFloor(acc.gem_floor);
+        if (!formInitialized.current) {
+          setLabel(acc.label);
+          setChannelId(acc.channel_id);
+          setFarmableItem(acc.farmable_item);
+          setGemFloor(acc.gem_floor);
+          formInitialized.current = true;
+        }
 
         if (isSupabaseConfigured) {
           const [dbHistory, dbLogs] = await Promise.all([

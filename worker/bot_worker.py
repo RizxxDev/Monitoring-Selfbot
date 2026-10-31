@@ -124,6 +124,8 @@ class BotWorker(threading.Thread):
         if farmable_item is not None and farmable_item != self.farmable_item:
             old_item = self.farmable_item
             self.farmable_item = farmable_item
+            if self.engine:
+                self.engine.farmable_item = farmable_item
             log.info("[%s] ⚡ Hot-reload farmable_item: '%s' -> '%s'", self.label, old_item, self.farmable_item)
         if gem_floor is not None and int(gem_floor) != self.gem_floor:
             old_floor = self.gem_floor
@@ -143,7 +145,7 @@ class BotWorker(threading.Thread):
         self.gw = Gateway(self.token)
         self.api._session_provider = lambda: self.gw.session_id if self.gw else ""
         self.gw.on_session = lambda sid: setattr(self.api, "session_id", sid)
-        self.engine = Engine(self.api, self.gw, self.channel_id)
+        self.engine = Engine(self.api, self.gw, self.channel_id, farmable_item=self.farmable_item)
 
         try:
             self.gw.start()
@@ -188,7 +190,7 @@ class BotWorker(threading.Thread):
 
             # Persiapan awal farm
             try:
-                prepare_autofarm(self.engine)
+                prepare_autofarm(self.engine, farmable_item=self.farmable_item)
             except Exception as exc:
                 log.warning("[%s] Persiapan awal autofarm ada kendala: %s", self.label, exc)
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { X, ExternalLink, Save, Trash2, Shield, Activity, Hash, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Account, EventLog } from '@/lib/types';
@@ -24,15 +24,23 @@ export function AccountDrawer({ account, isOpen, onClose }: AccountDrawerProps) 
   const [recentLogs, setRecentLogs] = useState<EventLog[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
+  const lastLoadedAccountId = useRef<string | null>(null);
+
   useEffect(() => {
-    if (account) {
-      setLabel(account.label);
-      setChannelId(account.channel_id);
-      setFarmableItem(account.farmable_item);
-      setGemFloor(account.gem_floor);
+    if (isOpen && account) {
+      if (lastLoadedAccountId.current !== account.id) {
+        lastLoadedAccountId.current = account.id;
+        setLabel(account.label);
+        setChannelId(account.channel_id);
+        setFarmableItem(account.farmable_item);
+        setGemFloor(account.gem_floor);
+      }
       setRecentLogs(simulationStore.getLogs(account.id).slice(0, 5));
     }
-  }, [account]);
+    if (!isOpen) {
+      lastLoadedAccountId.current = null;
+    }
+  }, [isOpen, account?.id, account?.farmable_item]);
 
   if (!isOpen || !account) return null;
 

@@ -32,11 +32,12 @@ class NavError(Exception):
 
 
 class Engine:
-    def __init__(self, api, gateway, channel_id, guild_id=""):
+    def __init__(self, api, gateway, channel_id, guild_id="", farmable_item="Pot O' Gems"):
         self.api = api
         self.gw = gateway
         self.channel_id = str(channel_id)
         self.guild_id = guild_id
+        self.farmable_item = farmable_item or "Pot O' Gems"
         self.msg = None       # pesan layar terkini yang terdeteksi
         self.screen = None
         self._session_msgs = []
@@ -273,25 +274,35 @@ class Engine:
                 f'Select "{spec}" tidak ditemukan di layar {screen_id}. Komponen: {found}'
             )
         options = self._select_options(doc, sel["custom_id"])
+        pick = None
         if options:
-            pick = next(
-                (
-                    o for o in options
-                    if option_pat.search(o.get("label") or "")
-                    or option_pat.search(o.get("value") or "")
-                    or option_pat.search(o.get("description") or "")
-                ),
-                None,
-            )
-        else:
-            pick = None
+            # 1. Coba exact match terlebih dahulu (case-insensitive)
+            clean_pat = getattr(option_pat, "pattern", str(option_pat)).strip("^$\\b").strip()
+            for o in options:
+                lbl = (o.get("label") or "").strip().lower()
+                val = (o.get("value") or "").strip().lower()
+                if lbl == clean_pat.lower() or val == clean_pat.lower():
+                    pick = o
+                    break
+
+            # 2. Fallback pencocokan regex
+            if not pick:
+                pick = next(
+                    (
+                        o for o in options
+                        if option_pat.search(o.get("label") or "")
+                        or option_pat.search(o.get("value") or "")
+                        or option_pat.search(o.get("description") or "")
+                    ),
+                    None,
+                )
         if pick is None:
             listed = ", ".join(o.get("label", "?") for o in options) or "(kosong)"
             raise NavError(
                 f"Opsi '{option_pat.pattern}' tidak ketemu pada select di {screen_id}. "
                 f"Opsi tersedia: {listed}"
             )
-        log.info("[select] %s -> %s", spec, pick.get("label"))
+        log.info("[select] %s -> '%s' (value: '%s')", spec, pick.get("label"), pick.get("value"))
         self.last_click_id = sel["custom_id"]
         return self.api.click_select(
             doc, sel["custom_id"], [pick.get("value")], self.guild_id
@@ -500,8 +511,10 @@ class Engine:
                 return 0
         return None
 
-    def buy_farmable(self, item_name="pot o' gems"):
+    def buy_farmable(self, item_name=None):
         """Beli farmable di Toko -> Farmable -> Select Item -> Buy Max -> Home."""
+        if not item_name:
+            item_name = getattr(self, "farmable_item", None) or "Pot O' Gems"
         log.info("[farmable] Menuju toko farmable untuk membeli '%s'...", item_name)
         screen, msg = self.goto("shop_farmable")
         doc = msg or self.msg or self.locate()[1]
@@ -511,7 +524,7 @@ class Engine:
         # 1. Pilih item di select menu
         clean_name = item_name.replace("'", "").replace("’", "").strip()
         rx_item = re.compile(
-            rf"{re.escape(item_name.strip())}|{re.escape(clean_name)}",
+            rf"^{re.escape(item_name.strip())}$|^{re.escape(clean_name)}$|\b{re.escape(item_name.strip())}\b",
             re.I,
         )
         try:
@@ -574,8 +587,13 @@ class Engine:
         if reply_buy:
             text = self.message_text(reply_buy)
             low = text.lower()
-            if "cannot afford or store any more" in low or "tidak dapat menyimpan lebih banyak" in low:
-                log.info("[farmable] ℹ️ Stok farmable sudah ada / penuh di inventori (cannot store any more). Kembali ke home...")
+            if (
+                "cannot afford or store any more" in low
+                or "tidak dapat menyimpan lebih banyak" in low
+                or "store any more" in low
+                or "cannot afford" in low
+            ):
+                log.info("[farmable] ℹ️ Respon toko: stok '%s' sudah tersimpan di inventory (cannot store any more). Kembali ke home...", item_name)
                 self.goto("home")
                 return
 
@@ -797,10 +815,9 @@ class Engine:
                 continue
             if msg_id and str(data.get("id")) != str(msg_id):
                 continue
-            # abaikan gema dari aksi sendiri (user self)
-            inter = data.get("interaction") or {}
-            user_id = (inter.get("user") or {}).get("id")
-            if user_id and str(user_id) == str(self.gw.user_id):
+            # Jangan proses echo jika pesan dikirim oleh user selfbot sendiri (bukan dari bot Growcord)
+            author_id = (data.get("author") or {}).get("id")
+            if author_id and str(author_id) == str(self.gw.user_id):
                 continue
             return data
         return None

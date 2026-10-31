@@ -18,6 +18,7 @@ from autofarm import (
     NavError,
     GemsExhaustedError,
     prepare_autofarm,
+    check_and_apply_buffs,
     set_autofarm_state,
     has_buff,
     GROWCORD_APP_ID,
@@ -94,6 +95,8 @@ class BotWorker(threading.Thread):
         self.last_buff_clover = int(cached.get("buff_clover_sec", 0))
         self.last_buff_arroz = int(cached.get("buff_arroz_sec", 0))
         self.last_buff_benedict = int(cached.get("buff_benedict_sec", 0))
+        self._last_buff_attempt: Dict[str, float] = {}
+        self._last_restock_time: float = 0.0
 
     def stop(self):
         """Meminta worker berhenti secara tertib."""
@@ -244,8 +247,30 @@ class BotWorker(threading.Thread):
                             self._handle_anti_afk_challenge(data)
                             continue
 
-                        # B. Baca pembaruan Embed Growcord Farm
+                        # B. Cek Pesan Ephemeral Toko & Pembaruan Embed Growcord Farm
                         if self.engine._is_growcord(data, GROWCORD_APP_ID):
+                            msg_text = self.engine.message_text(data)
+                            low_text = msg_text.lower()
+                            if (
+                                "cannot afford or store any more" in low_text
+                                or "tidak dapat menyimpan lebih banyak" in low_text
+                                or "store any more" in low_text
+                            ):
+                                log.info(
+                                    "[%s] ℹ️ Respon toko ephemeral: farmable '%s' sudah tersimpan di inventori (cannot store any more). Set stok=20.000 & tunda restock 15m.",
+                                    self.label,
+                                    self.farmable_item,
+                                )
+                                self.last_stock = 20000
+                                self.engine.last_known_stock = 20000
+                                self._last_restock_time = time.time() + 900.0
+                                try:
+                                    self.engine.goto("home")
+                                    set_autofarm_state(self.engine, "ON")
+                                except Exception:
+                                    pass
+                                continue
+
                             self._process_growcord_embed(data)
 
             except Exception as exc:
@@ -346,6 +371,9 @@ class BotWorker(threading.Thread):
                                 self.engine.buy_farmable(self.farmable_item)
                                 self.engine.goto("home")
                                 set_autofarm_state(self.engine, "ON")
+                                if getattr(self.engine, "last_known_stock", 0) >= 20000:
+                                    self.last_stock = 20000
+                                    self._last_restock_time = now + 900.0
                                 self.supabase.log_event(
                                     self.account_id,
                                     "SHOP_PURCHASE",
@@ -359,13 +387,14 @@ class BotWorker(threading.Thread):
             except Exception as exc:
                 log.debug("[%s] Error baca stok: %s", self.label, exc)
 
-            # Baca Buff
+            # Baca Buff & Deteksi Re-buff Otomatis
             try:
                 buffs = self.engine.read_active_buffs([data])
-                if buffs:
-                    self._update_buff_cache(buffs)
+                self._update_buff_cache(buffs, text)
+                if not self._paused:
+                    self._check_and_trigger_rebuff(now)
             except Exception as exc:
-                log.debug("[%s] Error baca buff: %s", self.label, exc)
+                log.debug("[%s] Error baca/rebuff: %s", self.label, exc)
 
             # Persistensikan snapshot status ke file cache lokal (Atomic Write)
             if self.last_gems > 0:
@@ -378,16 +407,105 @@ class BotWorker(threading.Thread):
                     buff_benedict=self.last_buff_benedict,
                 )
 
-    def _update_buff_cache(self, buffs: Dict[str, str]):
-        for name, dur_str in buffs.items():
+    def _update_buff_cache(self, buffs: Dict[str, Any], embed_text: str = ""):
+        found_clover = False
+        found_arroz = False
+        found_benedict = False
+
+        for name, dur_str in (buffs or {}).items():
             sec = parse_duration_to_sec(dur_str)
             low_name = name.lower()
             if "clover" in low_name:
                 self.last_buff_clover = sec
+                found_clover = True
             elif "arroz" in low_name:
                 self.last_buff_arroz = sec
+                found_arroz = True
             elif "benedict" in low_name:
                 self.last_buff_benedict = sec
+                found_benedict = True
+
+        # Jika embed farm terbaca, buff yang tidak ada di daftar berarti sudah habis (0s)
+        has_buff_header = bool(re.search(r"[*# ]*(Buff\s*Aktif|Aktif\s*Buff)", embed_text, re.I))
+        if has_buff_header:
+            if not found_clover:
+                self.last_buff_clover = 0
+            if not found_arroz:
+                self.last_buff_arroz = 0
+            if not found_benedict:
+                self.last_buff_benedict = 0
+        elif "Growcord Farm" in embed_text:
+            # Tidak ada bagian Buff Aktif sama sekali di embed farm -> semua buff habis
+            self.last_buff_clover = 0
+            self.last_buff_arroz = 0
+            self.last_buff_benedict = 0
+
+    def _check_and_trigger_rebuff(self, now: Optional[float] = None):
+        """Memeriksa apakah ada buff yang sudah habis (0 detik) dan langsung mengeksekusi re-buff dalam satu siklus terpadu."""
+        if self._paused or not self.engine:
+            return
+
+        now = now or time.time()
+        expired_buffs = []
+
+        # 1. Cek Arroz Con Pollo (30 menit)
+        if self.last_buff_arroz <= 0:
+            if now - self._last_buff_attempt.get("Arroz Con Pollo", 0.0) >= 60.0:
+                expired_buffs.append("Arroz Con Pollo")
+
+        # 2. Cek Eggs Benedict (30 menit)
+        if self.last_buff_benedict <= 0:
+            if now - self._last_buff_attempt.get("Eggs Benedict", 0.0) >= 60.0:
+                expired_buffs.append("Eggs Benedict")
+
+        # 3. Cek Lucky Clover (30 menit, hanya jika engine belum mencatat clover habis total di inventory)
+        clover_has_more = getattr(self.engine, "clover_has_more", True)
+        if self.last_buff_clover <= 0 and clover_has_more is not False:
+            if now - self._last_buff_attempt.get("Lucky Clover", 0.0) >= 60.0:
+                expired_buffs.append("Lucky Clover")
+
+        if not expired_buffs:
+            return
+
+        for b in expired_buffs:
+            self._last_buff_attempt[b] = now
+
+        log.info(
+            "[%s] 🍗 Deteksi buff habis (%s). Menjalankan re-buff otomatis...",
+            self.label,
+            ", ".join(expired_buffs),
+        )
+
+        try:
+            applied = check_and_apply_buffs(
+                self.engine,
+                target_buffs=expired_buffs,
+                gem_floor=self.gem_floor,
+                current_gems=self.last_gems,
+            )
+            # Pastikan kembali ke home dan status Farm tetap ON
+            self.engine.goto("home")
+            set_autofarm_state(self.engine, "ON")
+
+            if applied:
+                names = ", ".join(applied)
+                self.supabase.log_event(
+                    self.account_id,
+                    "BUFF_APPLIED",
+                    "INFO",
+                    f"Auto re-buff berhasil diterapkan: {names}",
+                )
+                self.notifier.send_alert(
+                    "[INFO] Buff Applied",
+                    f"Bot `{self.label}` otomatis menerapkan buff: **{names}**.",
+                    "INFO",
+                    self.label,
+                    {"Buffs": names, "Gems": f"{self.last_gems:,}"},
+                )
+        except GemsExhaustedError:
+            self._handle_critical_error("Gems habis saat mencoba auto re-buff di toko consumables.")
+        except Exception as exc:
+            log.warning("[%s] Gagal menjalankan auto re-buff: %s", self.label, exc)
 
     def _send_telemetry_update(self):
         """Kirim snapshot metrik ke Supabase."""
@@ -436,10 +554,16 @@ class BotWorker(threading.Thread):
 
             elif command == "FORCE_REBUFF":
                 log.info("[%s] Menjalankan Force Re-buff...", self.label)
-                # Konsumsi buff
                 try:
-                    prepare_autofarm(self.engine)
-                    self.supabase.log_event(self.account_id, "BUFF_APPLIED", "INFO", "Force Re-buff berhasil dieksekusi.")
+                    applied = check_and_apply_buffs(
+                        self.engine,
+                        gem_floor=self.gem_floor,
+                        current_gems=self.last_gems,
+                    )
+                    self.engine.goto("home")
+                    set_autofarm_state(self.engine, "ON")
+                    msg = f"Force Re-buff berhasil dieksekusi ({', '.join(applied)})." if applied else "Force Re-buff selesai."
+                    self.supabase.log_event(self.account_id, "BUFF_APPLIED", "INFO", msg)
                 except Exception as exc:
                     log.warning("[%s] Force rebuff ada kendala: %s", self.label, exc)
 

@@ -25,8 +25,8 @@ export interface Account {
     gems_balance: number;
     stock_remaining: number;
     is_farming: boolean;
-    buff_clover_sec: number;   // Lucky Clover (Max: 3600s / 1 hr)
-    buff_arroz_sec: number;    // Arroz Con Pollo (Max: 7200s / 2 hr)
+    buff_clover_sec: number;   // Lucky Clover (Max: 1800s / 30 min)
+    buff_arroz_sec: number;    // Arroz Con Pollo (Max: 1800s / 30 min)
     buff_benedict_sec: number; // Eggs Benedict (Max: 1800s / 30 min)
     gateway_ping_ms: number;
   };

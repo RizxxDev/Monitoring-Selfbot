@@ -1378,6 +1378,11 @@ class Engine:
                 kind, data, _ts = event
                 if kind != "interaction":
                     stashed.append(event)
+                    # Jika terdeteksi pesan balasan/ephemeral dari Growcord (misal penolakan toko), sudahi tunggu modal
+                    if kind in ("message_new", "message_edit") and self._is_growcord(data, GROWCORD_APP_ID):
+                        txt = self.message_text(data).lower()
+                        if "cannot afford or store any more" in txt or "tidak dapat menyimpan" in txt:
+                            break
                     continue
                 if str(data.get("channel_id")) != self.channel_id:
                     continue
@@ -1538,6 +1543,7 @@ class Engine:
                     "[farmable] ℹ️ Respon toko: stok '%s' sudah tersimpan di inventory (cannot store any more). Kembali ke home & set Auto Farm ON...",
                     item_name,
                 )
+                self.last_known_stock = 20000
                 self.goto("home")
                 try:
                     set_autofarm_state(self, "ON")
@@ -1774,16 +1780,30 @@ def has_buff(aktif_dict, buff_name):
     return False
 
 
-def check_and_apply_buffs(engine):
+def check_and_apply_buffs(
+    engine,
+    target_buffs=None,
+    gem_floor=0,
+    current_gems=0,
+):
     log.info("[buff] Memeriksa efek buff aktif...")
     try:
         engine.goto("home")
     except NavError as exc:
         log.warning("[buff] Gagal navigasi ke home saat cek buff: %s", exc)
-        return
+        return []
     aktif = engine.read_active_buffs()
 
-    for item in BUFF_ITEMS:
+    applied = []
+    items_to_process = BUFF_ITEMS
+    if target_buffs:
+        target_lower = [str(t).lower() for t in target_buffs]
+        items_to_process = [
+            item for item in BUFF_ITEMS
+            if item["nama"].lower() in target_lower or item["slug"].lower() in target_lower
+        ]
+
+    for item in items_to_process:
         nama, tombol_beli = item["nama"], item["beli"]
 
         # Jika Lucky Clover dan sudah pernah dicek di awal tanpa sisa stok, lewati jika tidak aktif
@@ -1830,6 +1850,16 @@ def check_and_apply_buffs(engine):
                 )
                 engine.clover_checked = True
                 engine.clover_has_more = False
+                continue
+
+            # Proteksi Gem Floor: jangan beli jika saldo di bawah atau sama dengan batas gem_floor
+            if current_gems > 0 and gem_floor > 0 and current_gems <= gem_floor:
+                log.warning(
+                    "[buff] Saldo gems (%d) di batas/bawah gem_floor (%d), menunda pembelian %s di toko.",
+                    current_gems,
+                    gem_floor,
+                    nama,
+                )
                 continue
 
             # Beli di Toko Consumables (hanya Arroz & Eggs Benedict)
@@ -1882,6 +1912,7 @@ def check_and_apply_buffs(engine):
             try:
                 if use_inventory_item(engine, nama, engine.read_active_buffs()):
                     used = True
+                    applied.append(nama)
                     log.info("[buff] ✅ %s berhasil digunakan!", nama)
                     break
             except (NavError, ApiError) as exc:
@@ -1906,6 +1937,7 @@ def check_and_apply_buffs(engine):
     except Exception:
         pass
     log.info("[buff] Pengecekan buff selesai.")
+    return applied
 
 
 # =============================================================================
@@ -2171,24 +2203,32 @@ def run_autofarm_system(engine):
                                 continue
 
                             # Kasus B: Buff habis (hilang dari Buff Aktif di embed)
-                            has_buff_header = ("Buff Aktif" in text) or ("Aktif Buff" in text)
-                            if has_buff_header and (not arroz_ok or not benedict_ok):
-                                log.warning(
-                                    "[autofarm] Buff terdeteksi habis (Arroz: %s, Benedict: %s)! Menjalankan re-buff...",
-                                    arroz_ok,
-                                    benedict_ok,
-                                )
-                                try:
-                                    check_and_apply_buffs(engine)
-                                    screen, msg = engine.goto("home")
-                                    if engine.read_autofarm_state([msg]) != "ON":
-                                        set_autofarm_state(engine, "ON")
-                                except Exception as exc:
-                                    log.warning("[autofarm] Kendala saat re-buff: %s", exc)
+                            clover_ok = has_buff(aktif, "Lucky Clover") or (getattr(engine, "clover_has_more", True) is False)
+                            if not arroz_ok or not benedict_ok or not clover_ok:
+                                target_expired = []
+                                if not arroz_ok:
+                                    target_expired.append("Arroz Con Pollo")
+                                if not benedict_ok:
+                                    target_expired.append("Eggs Benedict")
+                                if not clover_ok and (getattr(engine, "clover_has_more", True) is not False):
+                                    target_expired.append("Lucky Clover")
+
+                                if target_expired:
+                                    log.warning(
+                                        "[autofarm] Buff terdeteksi habis (%s)! Menjalankan re-buff spesifik...",
+                                        ", ".join(target_expired),
+                                    )
                                     try:
-                                        engine.goto("home")
-                                    except Exception:
-                                        pass
+                                        check_and_apply_buffs(engine, target_buffs=target_expired)
+                                        screen, msg = engine.goto("home")
+                                        if engine.read_autofarm_state([msg]) != "ON":
+                                            set_autofarm_state(engine, "ON")
+                                    except Exception as exc:
+                                        log.warning("[autofarm] Kendala saat re-buff: %s", exc)
+                                        try:
+                                            engine.goto("home")
+                                        except Exception:
+                                            pass
                                 if hasattr(engine, "safe_drain_events"):
                                     engine.safe_drain_events()
                                 else:
@@ -2243,12 +2283,22 @@ def run_autofarm_system(engine):
                         engine.buy_farmable(target_item)
                         screen, msg = engine.goto("home")
 
-                    if not arroz_ok or not benedict_ok:
-                        log.warning(
-                            "[autofarm] Heartbeat: Buff habis! Menjalankan re-buff..."
-                        )
-                        check_and_apply_buffs(engine)
-                        screen, msg = engine.goto("home")
+                    clover_ok = has_buff(aktif, "Lucky Clover") or (getattr(engine, "clover_has_more", True) is False)
+                    if not arroz_ok or not benedict_ok or not clover_ok:
+                        target_expired = []
+                        if not arroz_ok:
+                            target_expired.append("Arroz Con Pollo")
+                        if not benedict_ok:
+                            target_expired.append("Eggs Benedict")
+                        if not clover_ok and (getattr(engine, "clover_has_more", True) is not False):
+                            target_expired.append("Lucky Clover")
+                        if target_expired:
+                            log.warning(
+                                "[autofarm] Heartbeat: Buff habis (%s)! Menjalankan re-buff...",
+                                ", ".join(target_expired),
+                            )
+                            check_and_apply_buffs(engine, target_buffs=target_expired)
+                            screen, msg = engine.goto("home")
 
                     if engine.read_autofarm_state([msg]) != "ON":
                         set_autofarm_state(engine, "ON")

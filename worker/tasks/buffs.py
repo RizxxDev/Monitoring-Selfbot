@@ -113,7 +113,16 @@ def run(engine, args):
     bought = 0
     engine.goto("home")
     aktif = engine.read_active_buffs()
-    for item in ITEMS:
+    target_buffs = args.get("target_buffs") if isinstance(args, dict) else None
+    items_to_process = ITEMS
+    if target_buffs:
+        target_lower = [str(t).lower() for t in target_buffs]
+        items_to_process = [
+            item for item in ITEMS
+            if item["nama"].lower() in target_lower or item["slug"].lower() in target_lower
+        ]
+
+    for item in items_to_process:
         nama, beli = item["nama"], item["beli"]
         # Jika Lucky Clover dan sudah pernah dicek di awal tanpa sisa stok, lewati jika tidak aktif
         if beli is None and (getattr(engine, "clover_checked", False) is True) and (getattr(engine, "clover_has_more", False) is not True):

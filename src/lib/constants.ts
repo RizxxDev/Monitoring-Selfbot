@@ -6,7 +6,7 @@ export const BUFF_CONFIG = {
     id: 'buff_clover_sec',
     name: 'Lucky Clover',
     shortName: 'Clover',
-    maxSeconds: 3600, // 1 hour
+    maxSeconds: 1800, // 30 minutes
     color: 'emerald',
     icon: '🍀',
   },
@@ -14,7 +14,7 @@ export const BUFF_CONFIG = {
     id: 'buff_arroz_sec',
     name: 'Arroz Con Pollo',
     shortName: 'Arroz',
-    maxSeconds: 7200, // 2 hours
+    maxSeconds: 1800, // 30 minutes
     color: 'amber',
     icon: '🍗',
   },

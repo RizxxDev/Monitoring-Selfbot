@@ -330,20 +330,25 @@ class BotWorker(threading.Thread):
                 if stock is not None:
                     self.last_stock = stock
                     if stock <= 0 and not self._paused:
-                        log.info("[%s] Stok farmable habis (0). Membeli '%s'...", self.label, self.farmable_item)
-                        try:
-                            self.engine.buy_farmable(self.farmable_item)
-                            self.engine.goto("home")
-                            self.supabase.log_event(
-                                self.account_id,
-                                "SHOP_PURCHASE",
-                                "INFO",
-                                f"Auto-restock 20x {self.farmable_item} berhasil.",
-                            )
-                        except GemsExhaustedError:
-                            self._handle_critical_error("Gems habis saat mencoba auto-restock di toko.")
-                        except Exception as exc:
-                            log.warning("[%s] Gagal restock farmable: %s", self.label, exc)
+                        now = time.time()
+                        # Beri jeda minimal 60 detik antar percobaan restock agar tidak spamming toko jika inven sudah penuh
+                        if now - getattr(self, "_last_restock_time", 0.0) >= 60.0:
+                            self._last_restock_time = now
+                            log.info("[%s] Stok farmable 0. Mencoba restock '%s'...", self.label, self.farmable_item)
+                            try:
+                                self.engine.buy_farmable(self.farmable_item)
+                                self.engine.goto("home")
+                                set_autofarm_state(self.engine, "ON")
+                                self.supabase.log_event(
+                                    self.account_id,
+                                    "SHOP_PURCHASE",
+                                    "INFO",
+                                    f"Auto-restock farmable '{self.farmable_item}' diproses.",
+                                )
+                            except GemsExhaustedError:
+                                self._handle_critical_error("Gems habis saat mencoba auto-restock di toko.")
+                            except Exception as exc:
+                                log.warning("[%s] Gagal restock farmable: %s", self.label, exc)
             except Exception as exc:
                 log.debug("[%s] Error baca stok: %s", self.label, exc)
 

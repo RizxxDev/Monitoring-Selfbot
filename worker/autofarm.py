@@ -1501,9 +1501,14 @@ class Engine:
         reply_buy = self.wait_bot_reply(REPLY_TIMEOUT)
         if reply_buy:
             text = self.message_text(reply_buy)
+            low = text.lower()
+            if "cannot afford or store any more" in low or "tidak dapat menyimpan lebih banyak" in low:
+                log.info("[farmable] ℹ️ Stok farmable sudah ada / penuh di inventori (cannot store any more). Kembali ke home...")
+                self.goto("home")
+                return
+
             reason = self.abort_reason(text)
             if reason:
-                low = reason.lower()
                 if any(w in low for w in ("tidak cukup", "insufficient", "kehabisan", "gems")):
                     raise GemsExhaustedError(f"Pembelian farmable ditolak (Gems habis): {reason}")
                 raise NavError(f"Pembelian farmable ditolak: {reason}")

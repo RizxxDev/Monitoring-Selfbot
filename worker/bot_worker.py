@@ -147,10 +147,14 @@ class BotWorker(threading.Thread):
 
         try:
             self.gw.start()
-            if not self.gw.wait_ready(30):
-                err_msg = "Gateway tidak READY dalam 30 detik (koneksi terputus/timeout)"
-                self._handle_critical_error(err_msg)
-                return
+            # Berikan waktu hingga 60 detik untuk menerima payload READY & GUILD_CREATE dari Discord
+            if not self.gw.wait_ready(60):
+                if self.gw.ready.is_set():
+                    log.info("[%s] Gateway siap sesaat sebelum batas timeout.", self.label)
+                else:
+                    err_msg = "Gateway tidak READY dalam 60 detik (koneksi terputus/timeout)"
+                    self._handle_critical_error(err_msg)
+                    return
 
             if getattr(self.gw, "fatal", False):
                 err_msg = "Token ditolak oleh Discord Gateway (401 Unauthorized / Token Expired)"

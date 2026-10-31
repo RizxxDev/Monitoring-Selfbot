@@ -29,11 +29,11 @@ export const BUFF_CONFIG = {
 } as const;
 
 export const FARMABLE_ITEMS = [
-  "pot o' gems",
-  'laser grid',
-  'chandeliers',
-  'pepper tree',
-  'fish tank',
-  'high tech block',
-  'sorcerer stone',
+  "Pot O' Gems",
+  'Crystal Block',
+  'Game Grave',
+  'Rich Crystal',
+  'Diamond Ore',
+  'Diamond Block',
+  'Void Crystal Ore',
 ];

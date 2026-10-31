@@ -1384,7 +1384,8 @@ class Engine:
                         if "cannot afford or store any more" in txt or "tidak dapat menyimpan" in txt:
                             break
                     continue
-                if str(data.get("channel_id")) != self.channel_id:
+                d_chan = str(data.get("channel_id") or "")
+                if d_chan and self.channel_id and d_chan != str(self.channel_id):
                     continue
                 body = data.get("data") or data
                 fields = []
@@ -1405,12 +1406,18 @@ class Engine:
 
                 walk(body.get("components") or [])
                 if fields:
+                    token = (
+                        data.get("token")
+                        or body.get("token")
+                        or (data.get("interaction") or {}).get("token")
+                        or ""
+                    )
                     return {
-                        "custom_id": body.get("custom_id") or "",
+                        "custom_id": body.get("custom_id") or data.get("custom_id") or "",
                         "id": data.get("id") or body.get("id") or "",
                         "field_id": fields[0]["custom_id"],
                         "max_length": fields[0].get("max_length"),
-                        "token": data.get("token") or "",
+                        "token": token,
                     }
             return None
         finally:
@@ -1873,9 +1880,7 @@ def check_and_apply_buffs(
                     engine.goto("shop_consumable")
                     engine.click_screen_button("shop_consumable", tombol_beli)
                     modal = engine.capture_modal(MODAL_TIMEOUT)
-                    if modal is None and hasattr(engine, "_guess_modal"):
-                        modal = engine._guess_modal(getattr(engine, "last_click_id", ""))
-                    if modal:
+                    if modal and modal.get("token"):
                         engine.submit_modal_helper(modal, 5)
                         reply = engine.wait_bot_reply(REPLY_TIMEOUT)
                         if reply is not None:
@@ -1890,7 +1895,7 @@ def check_and_apply_buffs(
                         break
                     else:
                         log.warning(
-                            "[buff] Modal form pembelian %s tidak muncul (percobaan %d)",
+                            "[buff] Modal form pembelian %s tidak muncul (percobaan %d/2)",
                             nama,
                             buy_attempt,
                         )

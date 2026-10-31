@@ -747,7 +747,8 @@ class Engine:
                 if kind != "interaction":
                     stashed.append(event)
                     continue
-                if str(data.get("channel_id")) != self.channel_id:
+                d_chan = str(data.get("channel_id") or "")
+                if d_chan and self.channel_id and d_chan != str(self.channel_id):
                     continue
                 if msg_id and str(data.get("message", {}).get("id")) != str(msg_id):
                     continue
@@ -791,12 +792,13 @@ class Engine:
         fields = Engine._modal_fields(body.get("components") or [])
         if not fields:
             return None
+        token = data.get("token") or body.get("token") or (data.get("interaction") or {}).get("token") or ""
         return {
             "custom_id": body.get("custom_id") or "",
             "id": data.get("id") or body.get("id") or "",
             "field_id": fields[0]["custom_id"],
             "max_length": fields[0].get("max_length"),
-            "token": data.get("token") or "",
+            "token": token,
         }
 
     def wait_bot_reply(self, timeout, msg_id=None):

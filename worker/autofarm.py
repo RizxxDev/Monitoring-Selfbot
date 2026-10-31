@@ -1432,9 +1432,9 @@ class Engine:
         if doc is None:
             raise NavError("Layar shop_farmable tidak ditemukan")
 
-        clean_name = item_name.replace("'", "").replace("’", "")
+        clean_name = item_name.replace("'", "").replace("’", "").strip()
         rx_item = re.compile(
-            rf"{re.escape(item_name)}|{re.escape(clean_name)}|pot\s*o'?\s*gems",
+            rf"{re.escape(item_name.strip())}|{re.escape(clean_name)}",
             re.I,
         )
 

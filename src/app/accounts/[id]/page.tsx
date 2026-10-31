@@ -144,21 +144,30 @@ function AccountDetailPage() {
     showToast({ type: 'info', title: 'Restock Terkirim', message: `Membeli 20x ${account.farmable_item}.` });
   };
 
-  const handleSaveConfig = (e: React.FormEvent) => {
+  const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
-    simulationStore.updateAccount(account.id, {
-      label,
-      channel_id: channelId,
-      farmable_item: farmableItem,
-      gem_floor: Number(gemFloor),
-    });
-    setIsSaving(false);
-    showToast({
-      type: 'success',
-      title: 'Pengaturan Disimpan',
-      message: 'Konfigurasi akun berhasil diperbarui.',
-    });
+    try {
+      await simulationStore.updateAccount(account.id, {
+        label,
+        channel_id: channelId,
+        farmable_item: farmableItem,
+        gem_floor: Number(gemFloor),
+      });
+      showToast({
+        type: 'success',
+        title: 'Pengaturan Disimpan',
+        message: 'Konfigurasi akun berhasil diperbarui.',
+      });
+    } catch (err) {
+      showToast({
+        type: 'error',
+        title: 'Gagal Menyimpan',
+        message: 'Gagal memperbarui konfigurasi akun.',
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Filter logs by category

@@ -36,24 +36,33 @@ export function AccountDrawer({ account, isOpen, onClose }: AccountDrawerProps) 
 
   if (!isOpen || !account) return null;
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
 
-    simulationStore.updateAccount(account.id, {
-      label,
-      channel_id: channelId,
-      farmable_item: farmableItem,
-      gem_floor: Number(gemFloor),
-    });
+    try {
+      await simulationStore.updateAccount(account.id, {
+        label,
+        channel_id: channelId,
+        farmable_item: farmableItem,
+        gem_floor: Number(gemFloor),
+      });
 
-    setIsSaving(false);
-    showToast({
-      type: 'success',
-      title: 'Konfigurasi Disimpan',
-      message: `Perubahan pengaturan '${label}' berhasil diperbarui.`,
-    });
-    onClose();
+      showToast({
+        type: 'success',
+        title: 'Konfigurasi Disimpan',
+        message: `Perubahan pengaturan '${label}' berhasil diperbarui.`,
+      });
+      onClose();
+    } catch (err) {
+      showToast({
+        type: 'error',
+        title: 'Gagal Menyimpan',
+        message: 'Terjadi kesalahan saat menyimpan konfigurasi.',
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleDelete = () => {

@@ -1401,6 +1401,9 @@ class Engine:
                 self.gw.events.put(it)
 
     def submit_modal_helper(self, modal, value):
+        if not modal or not modal.get("token"):
+            log.warning("[form] Modal tidak memiliki interaction token yang valid, melewati submit modal.")
+            return None
         doc = self.msg or self.locate()[1]
         if doc is None:
             raise NavError("Pesan untuk submit modal tidak ditemukan")
@@ -1503,8 +1506,6 @@ class Engine:
         self.api.click_button(target_msg, btn_max["custom_id"], self.guild_id)
 
         modal = self.capture_modal(1.5)
-        if modal is None:
-            modal = self._guess_modal(btn_max["custom_id"])
         if modal:
             log.info("[farmable] Form konfirmasi modal muncul, submit 'max'...")
             self.submit_modal_helper(modal, "max")

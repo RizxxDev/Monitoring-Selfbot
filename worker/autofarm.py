@@ -378,6 +378,16 @@ class _AuthInvalid(Exception):
     pass
 
 
+class _ReconnectRequested(RuntimeError):
+    pass
+
+
+class _InvalidSession(RuntimeError):
+    def __init__(self, resumable=False):
+        super().__init__(f"gateway invalid session (op 9, resumable={resumable})")
+        self.resumable = resumable
+
+
 class Gateway:
     def __init__(self, token):
         self.token = token
@@ -385,6 +395,7 @@ class Gateway:
         self.events = queue.Queue(maxsize=300)
         self.seq = None
         self.session_id = ""
+        self.resume_gateway_url = ""
         self.user_name = ""
         self.user_id = ""
         self.ready_data = {}
@@ -395,6 +406,7 @@ class Gateway:
         self._stop_hb = None
         self._ws = None
         self.can_resume = True
+        self._backoff = 2.0
         self._thread = threading.Thread(target=self._loop, daemon=True)
 
     def start(self):
@@ -434,16 +446,28 @@ class Gateway:
         return self.ready.wait(timeout)
 
     def _loop(self):
-        backoff = 2.0
+        self._backoff = 2.0
         while self._run and not self.fatal:
             try:
                 self._connect()
-                backoff = 2.0
+                self._backoff = 2.0
             except _AuthInvalid:
                 self.fatal = True
                 log.error("Gateway menolak token (close 4004 / invalid session).")
                 self.ready.set()
                 return
+            except _ReconnectRequested:
+                if not self._run:
+                    return
+                self.ready.clear()
+                # Opcode 7: Discord meminta client reconnect dan resume segera tanpa jeda panjang
+                time.sleep(1.0)
+            except _InvalidSession as exc:
+                if not self._run:
+                    return
+                self.ready.clear()
+                # Opcode 9: Jika sesi invalid, jeda singkat lalu sambungkan kembali
+                time.sleep(1.5 if not exc.resumable else 1.0)
             except Exception as exc:
                 if not self._run:
                     return
@@ -451,15 +475,26 @@ class Gateway:
                     "gateway terputus: %s (%s), sambung ulang %.0fs",
                     type(exc).__name__,
                     exc,
-                    backoff,
+                    self._backoff,
                 )
                 self.ready.clear()
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+                time.sleep(self._backoff)
+                self._backoff = min(self._backoff * 2, 30.0)
 
     def _connect(self):
         self._stop_hb = threading.Event()
-        ws = websocket.create_connection(GATEWAY_URL, timeout=30)
+        can_resume = bool(
+            self.session_id and self.seq is not None and getattr(self, "can_resume", True)
+        )
+        target_url = GATEWAY_URL
+        if can_resume and getattr(self, "resume_gateway_url", ""):
+            base = self.resume_gateway_url.rstrip("/")
+            if "://" not in base:
+                target_url = f"wss://{base}?v=10&encoding=json"
+            else:
+                target_url = f"{base}?v=10&encoding=json"
+
+        ws = websocket.create_connection(target_url, timeout=30)
         self._ws = ws
         try:
             hello = self._recv_json(ws, timeout=15)
@@ -472,9 +507,6 @@ class Gateway:
             )
             hb.start()
 
-            can_resume = bool(
-                self.session_id and self.seq is not None and getattr(self, "can_resume", True)
-            )
             if can_resume:
                 log.info(
                     "gateway mencoba resume sesi %s (seq=%s)...",
@@ -592,18 +624,19 @@ class Gateway:
             self.seq = payload.get("s") or self.seq
             return
         if op == 7:
-            log.info("gateway meminta reconnect (op 7) -> menutup koneksi untuk resume...")
-            raise RuntimeError("gateway requested reconnect (op 7)")
+            log.info("gateway meminta reconnect (op 7) -> menyambung ulang segera untuk resume...")
+            raise _ReconnectRequested("gateway requested reconnect (op 7)")
         if op == 9:
             resumable = bool(payload.get("d"))
             if not resumable:
                 self.session_id = ""
                 self.seq = None
+                self.resume_gateway_url = ""
             log.warning(
                 "gateway opcode 9 (Invalid Session, resumable=%s), menghubungkan ulang...",
                 resumable,
             )
-            raise RuntimeError(f"gateway invalid session (op 9, resumable={resumable})")
+            raise _InvalidSession(resumable=resumable)
         if op != 0:
             return
         self.seq = payload.get("s") or self.seq
@@ -614,6 +647,7 @@ class Gateway:
 
         if name == "RESUMED":
             self.ready.set()
+            self._backoff = 2.0
             log.info("gateway resume berhasil: sesi %s dilanjutkan.", mask(self.session_id))
             return
 
@@ -622,8 +656,10 @@ class Gateway:
             self.user_name = user.get("username", "")
             self.user_id = user.get("id", "")
             self.session_id = data.get("session_id", "")
+            self.resume_gateway_url = data.get("resume_gateway_url", "")
             self.ready_data = data
             self.ready.set()
+            self._backoff = 2.0
             log.info(
                 "gateway siap: login sebagai %s (%s)",
                 self.user_name,

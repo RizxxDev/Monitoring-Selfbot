@@ -259,5 +259,35 @@ class TestAutofarmStateNoneResilience(unittest.TestCase):
             self.assertFalse(result)
 
 
+class TestOpcode7AndResumeUrl(unittest.TestCase):
+    def test_opcode_7_raises_reconnect_requested(self):
+        gw = CoreGateway("fake_token")
+        with self.assertRaises(RuntimeError) as ctx:
+            gw._handle({"op": 7})
+        self.assertIn("requested reconnect", str(ctx.exception).lower())
+
+    def test_single_script_opcode_7_raises_reconnect_requested(self):
+        gw = single_script.Gateway("fake_token")
+        with self.assertRaises(RuntimeError) as ctx:
+            gw._handle({"op": 7})
+        self.assertIn("requested reconnect", str(ctx.exception).lower())
+
+    def test_ready_event_saves_resume_gateway_url(self):
+        gw = CoreGateway("fake_token")
+        ready_payload = {
+            "op": 0,
+            "t": "READY",
+            "d": {
+                "user": {"id": "123", "username": "testuser"},
+                "session_id": "session_abc",
+                "resume_gateway_url": "wss://gateway-cluster-1.discord.gg",
+            },
+        }
+        gw._handle(ready_payload)
+        self.assertEqual(gw.resume_gateway_url, "wss://gateway-cluster-1.discord.gg")
+        self.assertEqual(gw.session_id, "session_abc")
+        self.assertEqual(gw._backoff, 2.0)
+
+
 if __name__ == "__main__":
     unittest.main()

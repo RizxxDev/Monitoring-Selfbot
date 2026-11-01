@@ -344,12 +344,15 @@ class Api:
         guild_id,
         interaction_token="",
         modal_id="",
+        application_id="",
     ):
         values = [
             {"type": 4, "custom_id": field_id, "value": str(value)}
             for field_id, value in fields
         ]
         payload = self._base_payload(msg, guild_id)
+        if application_id:
+            payload["application_id"] = str(application_id)
         data = {
             "custom_id": modal_custom_id,
             "components": [{"type": 1, "components": values}],
@@ -1448,21 +1451,29 @@ class Engine:
                         or (data.get("interaction") or {}).get("token")
                         or ""
                     )
-                    return {
+                    modal_res = {
                         "custom_id": body.get("custom_id") or data.get("custom_id") or "",
                         "id": data.get("id") or body.get("id") or "",
+                        "application_id": (data.get("application") or {}).get("id") or data.get("application_id") or "",
+                        "channel_id": data.get("channel_id") or "",
                         "field_id": fields[0]["custom_id"],
                         "max_length": fields[0].get("max_length"),
                         "token": token,
                     }
+                    log.info(
+                        "[modal] Modal form berhasil ditangkap: custom_id=%s, id=%s",
+                        modal_res["custom_id"],
+                        modal_res["id"],
+                    )
+                    return modal_res
             return None
         finally:
             for it in stashed:
                 self.gw.events.put(it)
 
     def submit_modal_helper(self, modal, value):
-        if not modal or not modal.get("token"):
-            log.warning("[form] Modal tidak memiliki interaction token yang valid, melewati submit modal.")
+        if not modal:
+            log.warning("[form] Modal tidak valid, melewati submit modal.")
             return None
         doc = self.msg or self.locate()[1]
         if doc is None:
@@ -1483,6 +1494,7 @@ class Engine:
             self.guild_id,
             interaction_token=modal.get("token") or "",
             modal_id=modal.get("id") or "",
+            application_id=modal.get("application_id") or "",
         )
 
     # -------------------------------------------------------------------------
@@ -1735,8 +1747,20 @@ def have_inventory_item(engine, nama):
         log.info("[buff] inventory consumables kosong")
         return False
     options = engine._select_options(doc, sel["custom_id"])
-    pat = re.compile(re.escape(nama), re.IGNORECASE)
-    return any(pat.search(o.get("label") or "") for o in options)
+    pat_str = re.escape(nama)
+    if "benedict" in nama.lower():
+        pat_str = r"Eggs?\s*Benedict|Benedict"
+    elif "arroz" in nama.lower():
+        pat_str = r"Arroz(?:\s*Con\s*Pollo)?"
+    elif "clover" in nama.lower():
+        pat_str = r"(?:Lucky\s*)?Clover"
+    pat = re.compile(pat_str, re.IGNORECASE)
+    return any(
+        pat.search(o.get("label") or "")
+        or pat.search(o.get("value") or "")
+        or pat.search(o.get("description") or "")
+        for o in options
+    )
 
 
 def use_inventory_item(engine, nama, aktif):
@@ -1916,7 +1940,7 @@ def check_and_apply_buffs(
                     engine.goto("shop_consumable")
                     engine.click_screen_button("shop_consumable", tombol_beli)
                     modal = engine.capture_modal(MODAL_TIMEOUT)
-                    if modal and modal.get("token"):
+                    if modal:
                         engine.submit_modal_helper(modal, 5)
                         reply = engine.wait_bot_reply(REPLY_TIMEOUT)
                         if reply is not None:

@@ -156,18 +156,48 @@ class TestAutoRebuff(unittest.TestCase):
         self.assertEqual(modal["custom_id"], "gc:modal:benedict")
         self.assertEqual(modal["field_id"], "amount")
 
-    def test_submit_modal_helper_skips_when_token_empty(self):
+    def test_submit_modal_helper_without_token_submits_successfully(self):
         from autofarm import Engine
         engine = Engine(MagicMock(), MagicMock(), "1565409104695009413")
-        # Modal tanpa token harus diskip tanpa memicu HTTP request
-        dummy_modal = {
-            "custom_id": "gc:modal:guess",
+        engine.msg = {"id": "msg-123", "channel_id": "1565409104695009413"}
+        # Modal user Discord tanpa token tetap disubmit menggunakan session_id dan modal id
+        real_modal = {
+            "custom_id": "gc:modal:benedict",
             "field_id": "amount",
+            "id": "123456",
             "token": "",
+            "application_id": "1198203414694338671",
         }
-        res = engine.submit_modal_helper(dummy_modal, 5)
-        self.assertIsNone(res)
-        engine.api.submit_modal.assert_not_called()
+        res = engine.submit_modal_helper(real_modal, 5)
+        engine.api.submit_modal.assert_called_once_with(
+            engine.msg,
+            "gc:modal:benedict",
+            [("amount", 5)],
+            engine.guild_id,
+            interaction_token="",
+            modal_id="123456",
+            application_id="1198203414694338671",
+        )
+
+    def test_have_inventory_item_flexible_matching(self):
+        from autofarm import have_inventory_item
+        engine = MagicMock()
+        mock_screen = MagicMock()
+        mock_screen.pattern.return_value = "select_item"
+        engine.goto.return_value = (mock_screen, {"id": "123"})
+        engine._match_button.return_value = {"custom_id": "item_select"}
+
+        # Kasus 1: Dropdown label 'Eggs Benedict'
+        engine._select_options.return_value = [{"label": "Eggs Benedict", "value": "benedict"}]
+        self.assertTrue(have_inventory_item(engine, "Eggs Benedict"))
+
+        # Kasus 2: Dropdown label '🥚 Benedict' atau 'Benedict'
+        engine._select_options.return_value = [{"label": "🥚 Benedict", "value": "benedict"}]
+        self.assertTrue(have_inventory_item(engine, "Eggs Benedict"))
+
+        # Kasus 3: Dropdown label 'Arroz Con Pollo' atau 'Arroz'
+        engine._select_options.return_value = [{"label": "🍗 Arroz", "value": "arroz"}]
+        self.assertTrue(have_inventory_item(engine, "Arroz Con Pollo"))
 
 
 if __name__ == "__main__":

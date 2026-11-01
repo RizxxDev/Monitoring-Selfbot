@@ -31,8 +31,20 @@ def _have_item(engine, nama):
         log.info("[buff] select tidak ada (inventory kosong) -> perlu beli")
         return False
     options = engine._select_options(doc, sel["custom_id"])
-    pat = re.compile(re.escape(nama), re.IGNORECASE)
-    return any(pat.search(o.get("label") or "") for o in options)
+    pat_str = re.escape(nama)
+    if "benedict" in nama.lower():
+        pat_str = r"Eggs?\s*Benedict|Benedict"
+    elif "arroz" in nama.lower():
+        pat_str = r"Arroz(?:\s*Con\s*Pollo)?"
+    elif "clover" in nama.lower():
+        pat_str = r"(?:Lucky\s*)?Clover"
+    pat = re.compile(pat_str, re.IGNORECASE)
+    return any(
+        pat.search(o.get("label") or "")
+        or pat.search(o.get("value") or "")
+        or pat.search(o.get("description") or "")
+        for o in options
+    )
 
 
 def _use_once(engine, nama, aktif):

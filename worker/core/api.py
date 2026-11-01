@@ -193,12 +193,15 @@ class Api:
         guild_id,
         interaction_token="",
         modal_id="",
+        application_id="",
     ):
         values = [
             {"type": 4, "custom_id": field_id, "value": str(value)}
             for field_id, value in fields
         ]
         payload = self._base_payload(msg, guild_id)
+        if application_id:
+            payload["application_id"] = str(application_id)
         data = {
             "custom_id": modal_custom_id,
             "components": [{"type": 1, "components": values}],

@@ -339,6 +339,7 @@ class Engine:
             self.guild_id,
             interaction_token=modal.get("token") or "",
             modal_id=modal.get("id") or "",
+            application_id=modal.get("application_id") or "",
         )
 
     def _press_kembali(self):

@@ -404,18 +404,22 @@ class Engine:
     # membaca data dari layar
     # ------------------------------------------------------------------
     def read_gems(self, msg=None):
-        doc = msg or self.msg
-        if doc is None:
-            return None
-        wx = self._rx_gem.search(self.message_text(doc))
-        if wx:
-            digits = re.sub(r"\D", "", wx.group(1))
-            # jam emoji "Gems:<snowflake>" tidak punya spasi; regex wajib
-            # spasi setelah titik dua sehingga tidak akan tersangkut.
-            try:
-                return int(digits)
-            except ValueError:
-                return None
+        if msg is not None:
+            docs = [msg] if isinstance(msg, dict) else msg
+        else:
+            docs = [self.msg] if self.msg else self.fetch_messages(30)
+        for doc in docs:
+            if not doc or not self._is_growcord(doc, cfg.GROWCORD_APP_ID):
+                continue
+            wx = self._rx_gem.search(self.message_text(doc))
+            if wx:
+                digits = re.sub(r"\D", "", wx.group(1))
+                # jam emoji "Gems:<snowflake>" tidak punya spasi; regex wajib
+                # spasi setelah titik dua sehingga tidak akan tersangkut.
+                try:
+                    return int(digits)
+                except ValueError:
+                    return None
         return None
 
     def read_active_buffs(self, msgs=None):
@@ -608,6 +612,68 @@ class Engine:
         # 3. Kembali ke main menu (home)
         log.info("[farmable] Kembali ke main menu (home)...")
         self.goto("home")
+
+    def buy_all_locks(self):
+        """Navigasi Toko -> Lock -> klik 'Beli All' -> kembali ke main menu (home)."""
+        log.info("[locks] Menuju Toko -> Lock untuk membeli semua lock (Beli All)...")
+        screen, msg = self.goto("locks")
+
+        clicked = False
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                self.click_screen_button("locks", "beli_all", msg=msg)
+                clicked = True
+                break
+            except NavError as exc:
+                last_err = exc
+                if "disabled" in str(exc).lower() and attempt < 3:
+                    log.warning(
+                        "[locks] Percobaan %d: tombol 'Beli All' sedang disabled, tunggu 2.5s...",
+                        attempt,
+                    )
+                    time.sleep(2.5)
+                    _, msg = self.locate()
+                    continue
+                if attempt < 3:
+                    time.sleep(1.5)
+                    _, msg = self.locate()
+                    continue
+
+        if not clicked:
+            try:
+                self.goto("home")
+            except Exception:
+                pass
+            raise NavError(f"Gagal menekan tombol 'Beli All' di Toko Lock: {last_err}")
+
+        reply_text = ""
+        gems_after = None
+        reply_buy = self.wait_bot_reply(cfg.REPLY_TIMEOUT)
+        if reply_buy:
+            reply_text = self.message_text(reply_buy)
+            reason = self.abort_reason(reply_text)
+            if reason:
+                try:
+                    self.goto("home")
+                except Exception:
+                    pass
+                raise NavError(f"Pembelian lock (Beli All) ditolak: {reason}")
+            log.info("[locks] Balasan Beli All: %s", reply_text.replace("\n", " ")[:140])
+            gems_after = self.read_gems([reply_buy])
+
+        log.info("[locks] Kembali ke main menu (home)...")
+        _, msg_home = self.goto("home")
+        if msg_home:
+            gems_home = self.read_gems([msg_home])
+            if gems_home is not None:
+                gems_after = gems_home
+
+        return {
+            "ok": True,
+            "gems_after": gems_after,
+            "reply_text": reply_text,
+        }
 
     def update_status_title(self, stock=None, buffs=None, state="ON"):
         """Perbarui judul jendela konsol/CMD untuk pemantauan realtime."""

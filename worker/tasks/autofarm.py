@@ -93,6 +93,23 @@ def _prepare_autofarm(engine):
     log.info("========== PERSIAPAN AUTOFARM ==========")
     screen, msg = engine.goto("home")
 
+    # 0. Prioritas #1: Jika Gems >= AUTO_LOCK_GEMS_THRESHOLD (2.1B), beli semua Lock dulu
+    lock_threshold = int(getattr(cfg, "AUTO_LOCK_GEMS_THRESHOLD", 2_100_000_000))
+    gems_init = engine.read_gems([msg]) if msg else None
+    if gems_init is not None and gems_init >= lock_threshold:
+        log.warning(
+            "[autofarm] 💎 Gems mencapai %s (>= %s)! Menjalankan Beli All Lock terlebih dahulu...",
+            engine.fmt_int(gems_init),
+            engine.fmt_int(lock_threshold),
+        )
+        try:
+            engine._last_lock_buy_time = time.time()
+            engine.buy_all_locks()
+            screen, msg = engine.goto("home")
+        except Exception as exc:
+            log.warning("[autofarm] Kendala saat auto-buy lock di persiapan awal: %s", exc)
+            screen, msg = engine.goto("home")
+
     # 1. Cek Lucky Clover 1x di awal atau saat punya stok tersisa
     if not getattr(engine, "clover_checked", False) or getattr(engine, "clover_has_more", False):
         aktif_init = engine.read_active_buffs(msg)
@@ -192,7 +209,11 @@ def _full_autofarm_loop(engine, args):
     log.info("[autofarm] ✅ Semua persiapan siap! Masuk mode idle monitoring.")
     log.info("[autofarm] 📡 Memantau pesan bot secara realtime:")
     log.info("  - Anti-AFK: auto-respond 'are you still there?' -> 'Yes, keep farming'")
-    log.info("  - Auto-Restock: jika farmable habis (0) -> otomatis beli Pot O' Gems")
+    log.info(
+        "  - Auto-Buy Lock: jika Gems >= %s -> Toko -> Lock -> Beli All -> Home",
+        f"{int(getattr(cfg, 'AUTO_LOCK_GEMS_THRESHOLD', 2_100_000_000)):,}".replace(",", "."),
+    )
+    log.info("  - Auto-Restock: jika farmable habis (0) -> otomatis beli farmable sesuai konfigurasi")
     log.info("  - Auto-Rebuff: jika buff habis -> otomatis re-buff")
     log.info("Tekan Ctrl+C untuk menghentikan.")
 
@@ -234,6 +255,37 @@ def _full_autofarm_loop(engine, args):
                     if engine._is_growcord(data, cfg.GROWCORD_APP_ID):
                         text = engine.message_text(data)
                         if "Growcord Farm" in text:
+                            # Prioritas #1: Auto-Buy Lock saat Gems >= AUTO_LOCK_GEMS_THRESHOLD
+                            lock_threshold = int(getattr(cfg, "AUTO_LOCK_GEMS_THRESHOLD", 2_100_000_000))
+                            gems = engine.read_gems([data])
+                            if gems is not None and gems >= lock_threshold:
+                                now_lock = time.time()
+                                if now_lock - getattr(engine, "_last_lock_buy_time", 0.0) >= 60.0:
+                                    engine._last_lock_buy_time = now_lock
+                                    log.warning(
+                                        "[autofarm] 💎 Gems mencapai %s (>= %s)! Menuju Toko -> Lock -> Beli All...",
+                                        engine.fmt_int(gems),
+                                        engine.fmt_int(lock_threshold),
+                                    )
+                                    try:
+                                        engine.buy_all_locks()
+                                        screen, msg = engine.goto("home")
+                                        if engine.read_autofarm_state([msg]) != "ON":
+                                            _set_autofarm_state(engine, "ON")
+                                    except Exception as exc:
+                                        log.warning("[autofarm] Kendala saat auto-buy lock: %s", exc)
+                                        try:
+                                            engine.goto("home")
+                                        except Exception:
+                                            pass
+                                    if hasattr(engine, "safe_drain_events"):
+                                        engine.safe_drain_events()
+                                    else:
+                                        while engine.gw.pop_event(timeout=0) is not None:
+                                            pass
+                                    last_check = time.time()
+                                    continue
+
                             stock = engine.read_farmable_stock([data])
                             aktif = engine.read_active_buffs([data])
                             current_state = engine.read_autofarm_state([data])
@@ -317,6 +369,18 @@ def _full_autofarm_loop(engine, args):
                 log.info("[autofarm] Pemeriksaan berkala (interval %ds)...", check_interval)
                 try:
                     screen, msg = engine.goto("home")
+                    lock_threshold = int(getattr(cfg, "AUTO_LOCK_GEMS_THRESHOLD", 2_100_000_000))
+                    gems_hb = engine.read_gems([msg]) if msg else None
+                    if gems_hb is not None and gems_hb >= lock_threshold:
+                        engine._last_lock_buy_time = time.time()
+                        log.warning(
+                            "[autofarm] Heartbeat: Gems mencapai %s (>= %s)! Menjalankan Beli All Lock...",
+                            engine.fmt_int(gems_hb),
+                            engine.fmt_int(lock_threshold),
+                        )
+                        engine.buy_all_locks()
+                        screen, msg = engine.goto("home")
+
                     stock = engine.read_farmable_stock(msg)
                     aktif = engine.read_active_buffs(msg)
                     current_state = engine.read_autofarm_state([msg])

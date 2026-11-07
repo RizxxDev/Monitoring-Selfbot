@@ -24,6 +24,7 @@ from autofarm import (
     GROWCORD_APP_ID,
     USER_AGENT,
     FARMABLE_ITEMS,
+    AUTO_LOCK_GEMS_THRESHOLD,
 )
 from notifier import DiscordNotifier
 from state_store import load_account_state, save_account_state
@@ -97,6 +98,7 @@ class BotWorker(threading.Thread):
         self.last_buff_benedict = int(cached.get("buff_benedict_sec", 0))
         self._last_buff_attempt: Dict[str, float] = {}
         self._last_restock_time: float = 0.0
+        self._last_lock_buy_time: float = 0.0
 
     def stop(self):
         """Meminta worker berhenti secara tertib."""
@@ -343,10 +345,15 @@ class BotWorker(threading.Thread):
             return
 
         if "Growcord Farm" in text:
+            now = time.time()
             # Baca Gems secara aman
             gems = self._read_gems_safe(data)
             if gems is not None:
                 self.last_gems = gems
+                # Prioritas #1: Jika Gems >= 2.100.000.000, jalankan Toko -> Lock -> Beli All terlebih dahulu
+                if gems >= AUTO_LOCK_GEMS_THRESHOLD and not self._paused:
+                    if self._check_and_buy_all_locks(gems, now=now):
+                        return
                 if gems < self.gem_floor:
                     log.warning("[%s] ⚠️ Saldo gems (%d) di bawah gem_floor (%d)!", self.label, gems, self.gem_floor)
                     self.supabase.log_event(
@@ -406,6 +413,89 @@ class BotWorker(threading.Thread):
                     buff_arroz=self.last_buff_arroz,
                     buff_benedict=self.last_buff_benedict,
                 )
+
+    def _check_and_buy_all_locks(self, gems: int, now: Optional[float] = None) -> bool:
+        """Prioritas #1: Jika saldo gems >= AUTO_LOCK_GEMS_THRESHOLD (2.1B),
+        navigasi Toko -> Lock -> Beli All -> Home -> pastikan Auto Farm ON.
+        Mengembalikan True jika siklus pembelian Lock berhasil dieksekusi.
+        """
+        if self._paused or not self.engine:
+            return False
+
+        now = now if now is not None else time.time()
+        if now - getattr(self, "_last_lock_buy_time", 0.0) < 60.0:
+            return False
+
+        self._last_lock_buy_time = now
+        log.info(
+            "[%s] 💎 Saldo Gems mencapai %s (>= %s)! Menjalankan Toko -> Lock -> Beli All...",
+            self.label,
+            f"{gems:,}",
+            f"{AUTO_LOCK_GEMS_THRESHOLD:,}",
+        )
+
+        try:
+            res = self.engine.buy_all_locks()
+            _, msg_home = self.engine.goto("home")
+            set_autofarm_state(self.engine, "ON")
+            if hasattr(self.engine, "safe_drain_events"):
+                self.engine.safe_drain_events()
+
+            gems_after = None
+            if isinstance(res, dict):
+                gems_after = res.get("gems_after")
+            if gems_after is None and msg_home:
+                gems_after = self._read_gems_safe(msg_home)
+            if gems_after is not None:
+                self.last_gems = gems_after
+
+            if self.last_gems >= 0:
+                save_account_state(
+                    account_id=self.account_id,
+                    gems=self.last_gems,
+                    stock=self.last_stock,
+                    buff_clover=self.last_buff_clover,
+                    buff_arroz=self.last_buff_arroz,
+                    buff_benedict=self.last_buff_benedict,
+                )
+
+            after_str = f"{gems_after:,}" if gems_after is not None else "terkonversi"
+            self.supabase.log_event(
+                self.account_id,
+                "SHOP_LOCK_PURCHASE",
+                "INFO",
+                f"Auto-buy Lock (Beli All) berhasil dijalankan pada saldo {gems:,} gems (sisa gems: {after_str}).",
+                {
+                    "gems_before": gems,
+                    "gems_after": gems_after,
+                    "threshold": AUTO_LOCK_GEMS_THRESHOLD,
+                },
+            )
+            self.notifier.send_alert(
+                "[INFO] Auto-Buy Lock Executed",
+                f"Bot `{self.label}` otomatis mengeksekusi **Beli All Lock** karena saldo mencapai **{gems:,}** gems.",
+                "INFO",
+                self.label,
+                {
+                    "Gems Sebelum": f"{gems:,}",
+                    "Gems Sesudah": after_str,
+                },
+            )
+            return True
+        except Exception as exc:
+            log.warning("[%s] Gagal menjalankan Auto-Buy Lock (Beli All): %s", self.label, exc)
+            try:
+                self.engine.goto("home")
+                set_autofarm_state(self.engine, "ON")
+            except Exception:
+                pass
+            self.supabase.log_event(
+                self.account_id,
+                "SHOP_LOCK_PURCHASE",
+                "WARNING",
+                f"Gagal menjalankan Auto-Buy Lock pada saldo {gems:,} gems: {exc}",
+            )
+            return False
 
     def _update_buff_cache(self, buffs: Dict[str, Any], embed_text: str = ""):
         found_clover = False

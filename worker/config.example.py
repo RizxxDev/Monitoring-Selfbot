@@ -14,10 +14,11 @@ CHANNEL_ID = os.getenv("GROWCORD_CHANNEL") or "ISI_CHANNEL_ID_DI_SINI"
 # (Opsional) ID aplikasi Growcord; otomatis diambil dari pesan bot jika kosong
 GROWCORD_APP_ID = ""
 
-# ================== PENGATURAN BELI WL ==================
+# ================== PENGATURAN BELI WL / LOCK ==================
 GEM_FLOOR = 2000          # berhenti kalau gems berada < nilai ini
 WL_PRICE  = 2000          # harga 1 WL dalam gems
 MAX_PER_BUY = 100         # batas jumlah per submit form (form: 1-100)
+AUTO_LOCK_GEMS_THRESHOLD = int(os.getenv("AUTO_LOCK_GEMS_THRESHOLD") or 2_100_000_000)  # otomatis Toko -> Lock -> Beli All saat gems >= 2,1 Miliar
 
 # ================== PENGATURAN TIMING ==================
 DELAY_NAV   = (2.0, 4.0)   # delay acak antar klik navigasi (detik)

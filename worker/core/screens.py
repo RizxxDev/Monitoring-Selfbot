@@ -70,7 +70,7 @@ SCREENS = [
             "mutations": "Mutations",
             "kembali": "Kembali",
         },
-        {"locks": r"\bLock\b", "item": r"\bItems?\b", "farmable": r"\bFarmables?\b", "consumable": r"\bConsumables?\b"},
+        {"locks": r"\bLocks?\b", "item": r"\bItems?\b", "farmable": r"\bFarmables?\b", "consumable": r"\bConsumables?\b"},
     ),
     Screen(
         "consumables",
@@ -136,12 +136,25 @@ SCREENS = [
     ),
     Screen(
         "locks",
-        [r"Locks\s*Toko", r"Beli\s*WL", r"Pembelian\s*WL\s*bebas\s*pajak"],
+        [
+            r"Locks?\s*(?:Toko|Shop)",
+            r"Toko\s*Locks?",
+            r"Beli\s*WL",
+            r"Pembelian\s*WL\s*bebas\s*pajak",
+        ],
         {
             "beli_wl": "Beli WL",
             "beli_dl": "Beli DL",
             "beli_bgl": "Beli BGL",
+            "beli_all": "Beli All",
             "kembali": "Kembali",
+        },
+        {
+            "beli_wl": r"\b(?:Beli|Buy)\s*WL\b",
+            "beli_dl": r"\b(?:Beli|Buy)\s*DL\b",
+            "beli_bgl": r"\b(?:Beli|Buy)\s*BGL\b",
+            "beli_all": r"\b(?:Beli|Buy)\s*(?:All|Semua|Max)\b",
+            "kembali": r"←?\s*(?:Kembali|Back|Toko|Shop)\b",
         },
     ),
 ]

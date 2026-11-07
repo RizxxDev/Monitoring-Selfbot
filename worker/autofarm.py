@@ -71,6 +71,9 @@ FARMABLE_ITEMS = [
 # Item farmable yang dibeli saat stock habis (default: Pot O' Gems)
 FARMABLE_ITEM = get_conf("FARMABLE_ITEM", "Pot O' Gems")
 
+# Batas otomatis konversi Gems ke Lock (Toko -> Lock -> Beli All) saat Gems >= 2.100.000.000
+AUTO_LOCK_GEMS_THRESHOLD = int(get_conf("AUTO_LOCK_GEMS_THRESHOLD", 2_100_000_000))
+
 # Interval pengecekan berkala (detik) saat sedang standby
 CHECK_INTERVAL = int(get_conf("AUTOFARM_CHECK_INTERVAL", 300))
 
@@ -772,7 +775,7 @@ SCREENS = [
             "kembali": "Kembali",
         },
         {
-            "locks": r"\bLock\b",
+            "locks": r"\bLocks?\b",
             "item": r"\bItems?\b",
             "farmable": r"\bFarmables?\b",
             "consumable": r"\bConsumables?\b",
@@ -858,12 +861,25 @@ SCREENS = [
     ),
     Screen(
         "locks",
-        [r"Locks\s*Toko", r"Beli\s*WL", r"Pembelian\s*WL\s*bebas\s*pajak"],
+        [
+            r"Locks?\s*(?:Toko|Shop)",
+            r"Toko\s*Locks?",
+            r"Beli\s*WL",
+            r"Pembelian\s*WL\s*bebas\s*pajak",
+        ],
         {
             "beli_wl": "Beli WL",
             "beli_dl": "Beli DL",
             "beli_bgl": "Beli BGL",
+            "beli_all": "Beli All",
             "kembali": "Kembali",
+        },
+        {
+            "beli_wl": r"\b(?:Beli|Buy)\s*WL\b",
+            "beli_dl": r"\b(?:Beli|Buy)\s*DL\b",
+            "beli_bgl": r"\b(?:Beli|Buy)\s*BGL\b",
+            "beli_all": r"\b(?:Beli|Buy)\s*(?:All|Semua|Max)\b",
+            "kembali": r"←?\s*(?:Kembali|Back|Toko|Shop)\b",
         },
     ),
 ]
@@ -1616,6 +1632,68 @@ class Engine:
         log.info("[farmable] Kembali ke main menu (home)...")
         self.goto("home")
 
+    def buy_all_locks(self):
+        """Navigasi Toko -> Lock -> klik 'Beli All' -> kembali ke main menu (home)."""
+        log.info("[locks] Menuju Toko -> Lock untuk membeli semua lock (Beli All)...")
+        screen, msg = self.goto("locks")
+
+        clicked = False
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                self.click_screen_button("locks", "beli_all", msg=msg)
+                clicked = True
+                break
+            except NavError as exc:
+                last_err = exc
+                if "disabled" in str(exc).lower() and attempt < 3:
+                    log.warning(
+                        "[locks] Percobaan %d: tombol 'Beli All' sedang disabled, tunggu 2.5s...",
+                        attempt,
+                    )
+                    time.sleep(2.5)
+                    _, msg = self.locate()
+                    continue
+                if attempt < 3:
+                    time.sleep(1.5)
+                    _, msg = self.locate()
+                    continue
+
+        if not clicked:
+            try:
+                self.goto("home")
+            except Exception:
+                pass
+            raise NavError(f"Gagal menekan tombol 'Beli All' di Toko Lock: {last_err}")
+
+        reply_text = ""
+        gems_after = None
+        reply_buy = self.wait_bot_reply(REPLY_TIMEOUT)
+        if reply_buy:
+            reply_text = self.message_text(reply_buy)
+            reason = self.abort_reason(reply_text)
+            if reason:
+                try:
+                    self.goto("home")
+                except Exception:
+                    pass
+                raise NavError(f"Pembelian lock (Beli All) ditolak: {reason}")
+            log.info("[locks] Balasan Beli All: %s", reply_text.replace("\n", " ")[:140])
+            gems_after = self.read_gems([reply_buy])
+
+        log.info("[locks] Kembali ke main menu (home)...")
+        _, msg_home = self.goto("home")
+        if msg_home:
+            gems_home = self.read_gems([msg_home])
+            if gems_home is not None:
+                gems_after = gems_home
+
+        return {
+            "ok": True,
+            "gems_after": gems_after,
+            "reply_text": reply_text,
+        }
+
     def update_status_title(self, stock=None, buffs=None, state="ON"):
         """Perbarui judul jendela konsol/CMD untuk pemantauan realtime."""
         if stock is None:
@@ -2077,6 +2155,22 @@ def prepare_autofarm(engine, farmable_item=None):
     log.info("================ PERSIAPAN AUTOFARM ================")
     screen, msg = engine.goto("home")
 
+    # 0. Prioritas #1: Jika Gems >= 2.100.000.000, beli semua Lock terlebih dahulu
+    gems_init = engine.read_gems([msg]) if msg else None
+    if gems_init is not None and gems_init >= AUTO_LOCK_GEMS_THRESHOLD:
+        log.warning(
+            "[autofarm] 💎 Gems mencapai %s (>= %s)! Menjalankan Beli All Lock terlebih dahulu...",
+            engine.fmt_int(gems_init),
+            engine.fmt_int(AUTO_LOCK_GEMS_THRESHOLD),
+        )
+        try:
+            engine._last_lock_buy_time = time.time()
+            engine.buy_all_locks()
+            screen, msg = engine.goto("home")
+        except Exception as exc:
+            log.warning("[autofarm] Kendala saat auto-buy lock di persiapan awal: %s", exc)
+            screen, msg = engine.goto("home")
+
     # 1. Cek Lucky Clover 1x di awal atau saat punya stok tersisa
     if not getattr(engine, "clover_checked", False) or getattr(engine, "clover_has_more", False):
         aktif_init = engine.read_active_buffs(msg)
@@ -2186,7 +2280,11 @@ def run_autofarm_system(engine):
         "  - Anti-AFK: jika bot kirim 'are you still there?' -> auto click 'Yes, keep farming'"
     )
     log.info(
-        "  - Auto-Restock: jika farmable habis (0) -> otomatis beli Pot O' Gems"
+        "  - Auto-Buy Lock: jika Gems >= %s -> Toko -> Lock -> Beli All -> Home",
+        f"{AUTO_LOCK_GEMS_THRESHOLD:,}".replace(",", "."),
+    )
+    log.info(
+        "  - Auto-Restock: jika farmable habis (0) -> otomatis beli farmable sesuai konfigurasi"
     )
     log.info(
         "  - Auto-Rebuff: jika buff habis -> otomatis re-buff"
@@ -2233,6 +2331,36 @@ def run_autofarm_system(engine):
                     if engine._is_growcord(data, GROWCORD_APP_ID):
                         text = engine.message_text(data)
                         if "Growcord Farm" in text:
+                            # Prioritas #1: Auto-Buy Lock saat Gems >= 2.100.000.000
+                            gems = engine.read_gems([data])
+                            if gems is not None and gems >= AUTO_LOCK_GEMS_THRESHOLD:
+                                now_lock = time.time()
+                                if now_lock - getattr(engine, "_last_lock_buy_time", 0.0) >= 60.0:
+                                    engine._last_lock_buy_time = now_lock
+                                    log.warning(
+                                        "[autofarm] 💎 Gems mencapai %s (>= %s)! Menuju Toko -> Lock -> Beli All...",
+                                        engine.fmt_int(gems),
+                                        engine.fmt_int(AUTO_LOCK_GEMS_THRESHOLD),
+                                    )
+                                    try:
+                                        engine.buy_all_locks()
+                                        screen, msg = engine.goto("home")
+                                        if engine.read_autofarm_state([msg]) != "ON":
+                                            set_autofarm_state(engine, "ON")
+                                    except Exception as exc:
+                                        log.warning("[autofarm] Kendala saat auto-buy lock: %s", exc)
+                                        try:
+                                            engine.goto("home")
+                                        except Exception:
+                                            pass
+                                    if hasattr(engine, "safe_drain_events"):
+                                        engine.safe_drain_events()
+                                    else:
+                                        while engine.gw.pop_event(timeout=0) is not None:
+                                            pass
+                                    last_periodic_check = time.time()
+                                    continue
+
                             stock = engine.read_farmable_stock([data])
                             aktif = engine.read_active_buffs([data])
                             current_state = engine.read_autofarm_state([data])
@@ -2327,6 +2455,17 @@ def run_autofarm_system(engine):
                 )
                 try:
                     screen, msg = engine.goto("home")
+                    gems_hb = engine.read_gems([msg]) if msg else None
+                    if gems_hb is not None and gems_hb >= AUTO_LOCK_GEMS_THRESHOLD:
+                        engine._last_lock_buy_time = time.time()
+                        log.warning(
+                            "[autofarm] Heartbeat: Gems mencapai %s (>= %s)! Menjalankan Beli All Lock...",
+                            engine.fmt_int(gems_hb),
+                            engine.fmt_int(AUTO_LOCK_GEMS_THRESHOLD),
+                        )
+                        engine.buy_all_locks()
+                        screen, msg = engine.goto("home")
+
                     stock = engine.read_farmable_stock(msg)
                     aktif = engine.read_active_buffs(msg)
                     current_state = engine.read_autofarm_state([msg])
